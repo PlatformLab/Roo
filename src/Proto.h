@@ -34,20 +34,20 @@ namespace Proto {
  * A unique identifier for a RooPC.
  */
 struct RooId {
-    uint64_t transportId;  ///< Uniquely identifies the client transport for
-                           ///< this RooPC.
-    uint64_t sequence;     ///< Sequence number for this RooPC (unique for
-                           ///< transportId, monotonically increasing).
+    uint64_t sessionId;  ///< Uniquely identifies the client transport for
+                         ///< this RooPC.
+    uint64_t sequence;   ///< Sequence number for this RooPC (unique for
+                         ///< sessionId, monotonically increasing).
 
     /// RooId default constructor.
     RooId()
-        : transportId(0)
+        : sessionId(0)
         , sequence(0)
     {}
 
     /// RooId constructor.
-    RooId(uint64_t transportId, uint64_t sequence)
-        : transportId(transportId)
+    RooId(uint64_t sessionId, uint64_t sequence)
+        : sessionId(sessionId)
         , sequence(sequence)
     {}
 
@@ -56,9 +56,8 @@ struct RooId {
      */
     bool operator<(RooId other) const
     {
-        return (transportId < other.transportId) ||
-               ((transportId == other.transportId) &&
-                (sequence < other.sequence));
+        return (sessionId < other.sessionId) ||
+               ((sessionId == other.sessionId) && (sequence < other.sequence));
     }
 
     /**
@@ -66,8 +65,7 @@ struct RooId {
      */
     bool operator==(RooId other) const
     {
-        return ((transportId == other.transportId) &&
-                (sequence == other.sequence));
+        return ((sessionId == other.sessionId) && (sequence == other.sequence));
     }
 
     /**
@@ -78,8 +76,60 @@ struct RooId {
         /// Return a "hash" of the given RooId.
         std::size_t operator()(const RooId& rooId) const
         {
-            std::size_t h1 = std::hash<uint64_t>()(rooId.transportId);
+            std::size_t h1 = std::hash<uint64_t>()(rooId.sessionId);
             std::size_t h2 = std::hash<uint64_t>()(rooId.sequence);
+            return h1 ^ (h2 << 1);
+        }
+    };
+} __attribute__((packed));
+
+/**
+ * A unique identifier for a Request.
+ */
+struct RequestId {
+    uint64_t sessionId;  ///< Unique id for session that sent this request.
+    uint64_t sequence;   ///< Sequence number for this request (unique for
+                         ///< sessionId, monotonically increasing).
+
+    /// RequestId default constructor.
+    RequestId()
+        : sessionId(0)
+        , sequence(0)
+    {}
+
+    /// RequestId constructor.
+    RequestId(uint64_t sessionId, uint64_t sequence)
+        : sessionId(sessionId)
+        , sequence(sequence)
+    {}
+
+    /**
+     * Comparison function for RequestId, for use in std::maps etc.
+     */
+    bool operator<(RequestId other) const
+    {
+        return (sessionId < other.sessionId) ||
+               ((sessionId == other.sessionId) && (sequence < other.sequence));
+    }
+
+    /**
+     * Equality function for RequestId, for use in std::unordered_maps etc.
+     */
+    bool operator==(RequestId other) const
+    {
+        return ((sessionId == other.sessionId) && (sequence == other.sequence));
+    }
+
+    /**
+     * This class computes a hash of an RequestId, so that Id can be used
+     * as keys in unordered_maps.
+     */
+    struct Hasher {
+        /// Return a "hash" of the given RequestId.
+        std::size_t operator()(const RequestId& requestId) const
+        {
+            std::size_t h1 = std::hash<uint64_t>()(requestId.sessionId);
+            std::size_t h2 = std::hash<uint64_t>()(requestId.sequence);
             return h1 ^ (h2 << 1);
         }
     };
@@ -125,6 +175,9 @@ struct HeaderPrefix {
 struct Header {
     HeaderPrefix prefix;  ///< Common to all versions of the protocol.
     RooId rooId;          ///< Id of the RooPC to which this message belongs.
+    RequestId requestId;  ///< Id of this message, if this message is a request;
+                          ///< or, id of the request to which this message
+                          ///< responds, if this message is a response.
     Type type;            ///< Identifies what the type of the message
     Homa::Driver::WireFormatAddress
         replyAddress;  ///< Replies to this Message should
@@ -134,14 +187,16 @@ struct Header {
     Header()
         : prefix(1)
         , rooId()
+        , requestId()
         , type(Type::Invalid)
         , replyAddress()
     {}
 
     /// CommonHeader constructor.
-    explicit Header(RooId rooId, Type type)
+    explicit Header(RooId rooId, RequestId requestId, Type type)
         : prefix(1)
         , rooId(rooId)
+        , requestId(requestId)
         , type(type)
         , replyAddress()
     {}

@@ -28,8 +28,9 @@ namespace Roo {
  */
 SessionImpl::SessionImpl(Homa::Transport* transport)
     : transport(transport)
+    , sessionId(transport->getId())
+    , nextSequenceNumber(1)
     , mutex()
-    , nextRooSequenceNumber(1)
     , rpcs()
     , pendingTasks()
     , detachedTasks()
@@ -47,8 +48,8 @@ Roo::unique_ptr<RooPC>
 SessionImpl::allocRooPC()
 {
     SpinLock::Lock lock_session(mutex);
-    Proto::RooId rooId =
-        Proto::RooId(transport->getId(), nextRooSequenceNumber++);
+    Proto::RooId rooId = Proto::RooId(
+        sessionId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
     RooPCImpl* rpc = new RooPCImpl(this, rooId);
     rpcs.insert({rooId, rpc});
     return Roo::unique_ptr<RooPC>(rpc);
@@ -115,6 +116,16 @@ SessionImpl::poll()
             }
         }
     }
+}
+
+/**
+ * Return a new unique RequestId.
+ */
+Proto::RequestId
+SessionImpl::allocRequestId()
+{
+    return Proto::RequestId(
+        sessionId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
 }
 
 /**

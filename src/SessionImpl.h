@@ -19,6 +19,7 @@
 #include <Homa/Homa.h>
 #include <Roo/Roo.h>
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -44,6 +45,7 @@ class SessionImpl : public Session {
     virtual Roo::unique_ptr<ServerTask> receive();
     virtual void poll();
 
+    Proto::RequestId allocRequestId();
     void dropRooPC(RooPCImpl* rpc);
     void remandTask(ServerTaskImpl* task);
 
@@ -51,11 +53,15 @@ class SessionImpl : public Session {
     Homa::Transport* const transport;
 
   private:
+    /// Identifer for this session.  This identifer must be unique among all
+    /// sessions that might communicate.
+    uint64_t const sessionId;
+
+    /// Used to generate session unique identifiers.
+    std::atomic<uint64_t> nextSequenceNumber;
+
     // Monitor style mutex.
     SpinLock mutex;
-
-    /// Unique identifier for the next RooPC this transport sends.
-    uint64_t nextRooSequenceNumber;
 
     /// Tracks the set of RooPC objects that were initiated by this session.
     std::unordered_map<Proto::RooId, RooPCImpl*, Proto::RooId::Hasher> rpcs;

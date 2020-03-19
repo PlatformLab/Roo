@@ -33,6 +33,7 @@ ServerTaskImpl::ServerTaskImpl(SessionImpl* session,
     , detached(false)
     , session(session)
     , rooId(requestHeader->rooId)
+    , requestId(requestHeader->requestId)
     , isInitialRequest(requestHeader->type == Proto::Message::Type::Initial)
     , request(request)
     , replyAddress(session->transport->getDriver()->getAddress(
@@ -80,7 +81,8 @@ ServerTaskImpl::allocOutMessage()
 void
 ServerTaskImpl::reply(Homa::OutMessage* message)
 {
-    Proto::Message::Header header(rooId, Proto::Message::Type::Response);
+    Proto::Message::Header header(rooId, requestId,
+                                  Proto::Message::Type::Response);
     session->transport->getDriver()->addressToWireFormat(replyAddress,
                                                          &header.replyAddress);
     response = message;
@@ -95,7 +97,9 @@ void
 ServerTaskImpl::delegate(Homa::Driver::Address destination,
                          Homa::OutMessage* message)
 {
-    Proto::Message::Header header(rooId, Proto::Message::Type::Request);
+    Proto::RequestId newRequestId = session->allocRequestId();
+    Proto::Message::Header header(rooId, newRequestId,
+                                  Proto::Message::Type::Request);
     session->transport->getDriver()->addressToWireFormat(replyAddress,
                                                          &header.replyAddress);
     pendingRequest = message;

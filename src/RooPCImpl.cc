@@ -61,7 +61,9 @@ RooPCImpl::send(Homa::Driver::Address destination, Homa::OutMessage* request)
 {
     Homa::Driver::Address replyAddress =
         session->transport->getDriver()->getLocalAddress();
-    Proto::Message::Header outboundHeader(rooId, Proto::Message::Type::Initial);
+    Proto::RequestId requestId = session->allocRequestId();
+    Proto::Message::Header outboundHeader(rooId, requestId,
+                                          Proto::Message::Type::Initial);
     session->transport->getDriver()->addressToWireFormat(
         replyAddress, &outboundHeader.replyAddress);
     request->prepend(&outboundHeader, sizeof(outboundHeader));

@@ -66,6 +66,9 @@ class ServerTaskImpl : public ServerTask {
     /// Identifier the RooPC that triggered this ServerTask.
     Proto::RooId const rooId;
 
+    /// Identifier for request that triggered this ServerTask.
+    Proto::RequestId const requestId;
+
     /// Identify whether the request can directly from a RooPC client.
     bool const isInitialRequest;
 
