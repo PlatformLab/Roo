@@ -66,9 +66,8 @@ class ServerTaskImpl : public ServerTask {
     /// Identifier the RooPC that triggered this ServerTask.
     Proto::RooId const rooId;
 
-    /// Unique identifier for the request message among the set of messages
-    /// associated with a RooPC with a given RooId.
-    int32_t stageId;
+    /// Identify whether the request can directly from a RooPC client.
+    bool const isInitialRequest;
 
     /// Message containing a task request; may come directly from the RooPC
     /// client, or from another server that has delegated a request to us.

@@ -91,12 +91,15 @@ struct RooId {
  */
 namespace Message {
 
-/// Identifier for the Message that contains a RooPC's initiating request
-/// RooPC (sent by the client).
-static const int32_t INITIAL_REQUEST_ID = 0;
-/// Identifier for the Message that contains the final reply to the
-/// initial request (sent to the client).
-static const int32_t ULTIMATE_RESPONSE_ID = -1;
+/**
+ * Distinguishes between different types of RooPC messages.
+ */
+enum class Type : uint8_t {
+    Initial,   ///< Request sent directly from the RooPC client
+    Request,   ///< Request sent by an intermediate ServerTask
+    Response,  ///< Response sent to the RooPC client
+    Invalid,   ///< No message should be of this type
+};
 
 /**
  * This is the first part of the Homa packet header and is common to all
@@ -122,8 +125,7 @@ struct HeaderPrefix {
 struct Header {
     HeaderPrefix prefix;  ///< Common to all versions of the protocol.
     RooId rooId;          ///< Id of the RooPC to which this message belongs.
-    int32_t stageId;  ///< Uniquely identifies this Message within the set of
-                      ///< messages that belong to the RooPC.
+    Type type;            ///< Identifies what the type of the message
     Homa::Driver::WireFormatAddress
         replyAddress;  ///< Replies to this Message should
                        ///< be sent to this address.
@@ -132,17 +134,18 @@ struct Header {
     Header()
         : prefix(1)
         , rooId()
-        , stageId()
+        , type(Type::Invalid)
         , replyAddress()
     {}
 
     /// CommonHeader constructor.
-    explicit Header(RooId rooId, int32_t stageId)
+    explicit Header(RooId rooId, Type type)
         : prefix(1)
         , rooId(rooId)
-        , stageId(stageId)
+        , type(type)
         , replyAddress()
     {}
+
 } __attribute__((packed));
 
 }  // namespace Message

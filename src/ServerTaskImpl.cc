@@ -33,7 +33,7 @@ ServerTaskImpl::ServerTaskImpl(SessionImpl* session,
     , detached(false)
     , session(session)
     , rooId(requestHeader->rooId)
-    , stageId(requestHeader->stageId)
+    , isInitialRequest(requestHeader->type == Proto::Message::Type::Initial)
     , request(request)
     , replyAddress(session->transport->getDriver()->getAddress(
           &requestHeader->replyAddress))
@@ -80,7 +80,7 @@ ServerTaskImpl::allocOutMessage()
 void
 ServerTaskImpl::reply(Homa::OutMessage* message)
 {
-    Proto::Message::Header header(rooId, Proto::Message::ULTIMATE_RESPONSE_ID);
+    Proto::Message::Header header(rooId, Proto::Message::Type::Response);
     session->transport->getDriver()->addressToWireFormat(replyAddress,
                                                          &header.replyAddress);
     response = message;
@@ -95,7 +95,7 @@ void
 ServerTaskImpl::delegate(Homa::Driver::Address destination,
                          Homa::OutMessage* message)
 {
-    Proto::Message::Header header(rooId, stageId + 1);
+    Proto::Message::Header header(rooId, Proto::Message::Type::Request);
     session->transport->getDriver()->addressToWireFormat(replyAddress,
                                                          &header.replyAddress);
     pendingRequest = message;
@@ -123,7 +123,7 @@ ServerTaskImpl::poll()
             outState = response->getStatus();
             if (outState == Homa::OutMessage::Status::SENT) {
                 state.store(State::COMPLETED);
-                if (stageId != Proto::Message::INITIAL_REQUEST_ID) {
+                if (!isInitialRequest) {
                     request->acknowledge();
                 }
             }
@@ -131,7 +131,7 @@ ServerTaskImpl::poll()
             outState = pendingRequest->getStatus();
             if (outState == Homa::OutMessage::Status::COMPLETED) {
                 state.store(State::COMPLETED);
-                if (stageId != Proto::Message::INITIAL_REQUEST_ID) {
+                if (!isInitialRequest) {
                     request->acknowledge();
                 }
             } else if (outState == Homa::OutMessage::Status::FAILED) {

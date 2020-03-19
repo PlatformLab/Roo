@@ -22,7 +22,7 @@ namespace Roo {
 /**
  * RooPCImpl constructor.
  */
-RooPCImpl::RooPCImpl(SessionImpl* session, Proto::RooId RooId)
+RooPCImpl::RooPCImpl(SessionImpl* session, Proto::RooId rooId)
     : session(session)
     , rooId(rooId)
     , pendingRequest(nullptr)
@@ -61,8 +61,7 @@ RooPCImpl::send(Homa::Driver::Address destination, Homa::OutMessage* request)
 {
     Homa::Driver::Address replyAddress =
         session->transport->getDriver()->getLocalAddress();
-    Proto::Message::Header outboundHeader(rooId,
-                                          Proto::Message::INITIAL_REQUEST_ID);
+    Proto::Message::Header outboundHeader(rooId, Proto::Message::Type::Initial);
     session->transport->getDriver()->addressToWireFormat(
         replyAddress, &outboundHeader.replyAddress);
     request->prepend(&outboundHeader, sizeof(outboundHeader));

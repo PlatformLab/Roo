@@ -82,7 +82,7 @@ SessionImpl::poll()
         Proto::Message::Header header;
         message->get(0, &header, sizeof(header));
         message->strip(sizeof(header));
-        if (header.stageId == Proto::Message::ULTIMATE_RESPONSE_ID) {
+        if (header.type == Proto::Message::Type::Response) {
             // Incoming message is a response
             SpinLock::Lock lock_session(mutex);
             auto it = rpcs.find(header.rooId);
