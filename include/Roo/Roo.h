@@ -1,4 +1,4 @@
-/* Copyright (c) 2018-2020, Stanford University
+/* Copyright (c) 2020, Stanford University
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -18,277 +18,213 @@
 
 #include <Homa/Driver.h>
 #include <Homa/Homa.h>
-#include <Roo/Proto.h>
 
 #include <atomic>
 #include <bitset>
 #include <cstdint>
+#include <memory>
 
 namespace Roo {
 
-// forward declarations
-class OpManager;
-class OpManagerInternal;
-namespace Core {
-class OpContext;
-}  // namespace Core
+// Forward declarations
+class Session;
 
 /**
- * A RemoteOp is a Message pair consisting of a request Message to be sent to
- * and processed by a "remote server" and a response Message that returns the
- * result of processing the request.
+ * Shorthand for an std::unique_ptr with a customized deleter.
+ */
+template <typename T>
+using unique_ptr = std::unique_ptr<T, typename T::Deleter>;
+
+/**
+ * A collection of requests and an associated collection responses that can be
+ * sent and received asynchronously.
  *
- * An RPC (Remote Procedure Call) is a simple example of a RemoteOp.  Unlike
- * RPCs, however, the processing of the operation maybe delegated by one server
- * to another.  As such, the response may not come from the server that
- * initially received the request.
+ * An RPC is the simplest example of a RooPC where the client sends only one
+ * request and expects only one response.  Unlike with RPCs, servers that handle
+ * RooPC requests can delegate tasks to other servers that can response on its
+ * behalf. A server may also choose to handle a single request by delegating
+ * more than one tasks. Each requested task will result in zero or one responses
+ * back to the client that initiated the RooPC.  A client may also choose it
+ * send more than one request in a single RooPC.
  *
  * This class is NOT thread-safe.
  */
-class RemoteOp {
+class RooPC {
   public:
-    enum class State {
-        NOT_STARTED,  // Initial state before the request has been sent.
-        IN_PROGRESS,  // The request has been sent but no response has been
-                      // received.
-        COMPLETED,    // The RemoteOp has completed and the server's response is
-                      // available in response.
-        FAILED,       // The RemoteOp has failed to send.
+    /**
+     * Custom deleter for use with std::unique_ptr.
+     */
+    struct Deleter {
+        void operator()(RooPC* roopc)
+        {
+            roopc->destroy();
+        }
     };
 
     /**
-     * Constructor for an RemoteOp object.
-     *
-     * @param transport
-     *      Pointer to the Homa::OpManager which will send/receive this RPC.
+     * Encodes the status of a RooPC.
      */
-    explicit RemoteOp(OpManager* transport);
+    enum class Status {
+        NOT_STARTED,  //< Initial state before any request has been sent.
+        IN_PROGRESS,  //< One or more requests have been sent but not all
+                      //< expected responses have been received.
+        COMPLETED,    //< All expected responses have been received.
+        FAILED,       // The RooPC has failed to send.
+    };
 
     /**
-     * Default destructor for a RemoteOp object.
+     * Return a new OutMessage that can be sent as a request for this RooPC.
+     *
+     * @return
+     *      A newly allocated message object.  Ownership of the message object
+     *      is transferred to the caller.
      */
-    ~RemoteOp();
+    virtual Homa::OutMessage* allocRequest() = 0;
 
     /**
-     * Send the RemoteOp asynchronously.
-     *
-     * WARNING: Do not modify the request after calling this method.
+     * Send a new request for this RooPC asynchronously.
      *
      * @param destination
      *      The network address to which the request will be sent.
+     * @param request
+     *      The request that should be sent.  Ownership of the request message
+     *      is transferred to this RooPC.
      */
-    void send(Homa::Driver::Address destination);
+    virtual void send(Homa::Driver::Address destination,
+                      Homa::OutMessage* request) = 0;
 
     /**
-     * Indicates whether this RemoteOp is done being processed.  Used to
-     * asynchronously process a RemoteOp.  If this call returns true, the
-     * RemoteOp has either completed with the response Message populated or
-     * failed (e.g. request timed out) with the response Message left pointing
-     * to nullptr.
+     * Return a received response for this RooPC.
      *
      * @return
-     *      True means that the RemoteOp has completed or failed; #wait will not
-     *      block.  False means that the RemoteOp is still being processed.
+     *      Returns a received response message, if available; otherwise, a
+     *      nullptr is returned.  Ownership of returned response message objects
+     *      are transferred to the caller.
      */
-    bool isReady();
+    virtual Homa::InMessage* receive() = 0;
 
     /**
-     * Wait for a response to be received for this RemoteOp.
+     * Check and return the current Status of this RooPC.
      */
-    void wait();
+    virtual Status checkStatus() = 0;
 
-    /// Message to be sent to and processed by the target "remote server".
-    Homa::OutMessage* request;
+    /**
+     * Wait until all expected responses have been received or the RooPC
+     * encountered some kind of failure.
+     */
+    virtual void wait() = 0;
 
-    /// Message containing the result of processing the RemoteOp request.
-    Homa::InMessage* response;
-
-  private:
-    /// OpManager that owns this RemoteOp.
-    OpManager* const transport;
-
-    /// Unique identifier for this RemoteOp.
-    Proto::OpId opId;
-
-    /// The current state of this RemoteOp
-    std::atomic<State> state;
-
-    // Disable Copy and Assign
-    RemoteOp(const RemoteOp&) = delete;
-    RemoteOp& operator=(const RemoteOp&) = delete;
-
-    friend class OpManager;
+  protected:
+    /**
+     * Destruct this ServerTask and free any associated memory.
+     */
+    virtual void destroy() = 0;
 };
 
 /**
- * A ServerOp is a Message pair consisting of an incoming request Message to
- * be processed and an outgoing response Message containing the result of
- * processing the operation.
- *
- * The request may come directly from the client or from another server that is
- * delegating the processing all or part of the operation.  The response can
- * either be sent back sent to the original client or delegated to a different
- * server for additional processing. Used by servers to handle incoming direct
- * or delegated requests.
+ * A handle for an incoming request providing access to the request message and
+ * an interface for sending a response or additional requests.
  *
  * This class is NOT thread-safe.
  */
-class ServerOp {
+class ServerTask {
   public:
-    enum class State {
-        NOT_STARTED,  // Initial state before the request has been received.
-        IN_PROGRESS,  // Request received but response has not yet been sent.
-        DROPPED,      // The request was dropped.
-        COMPLETED,    // The server's response has been sent/acknowledged.
-        FAILED,       // The response failed to be sent/processed.
-    };
-
     /**
-     * Construct an empty ServerOp object.
+     * Return the incoming request message.
+     *
+     * @return
+     *      Pointer to the incoming request message.  Ownership of the message
+     *      is not transferred to the caller; the message's lifetime is tied to
+     *      this RequestContext.
      */
-    ServerOp();
+    virtual Homa::InMessage* getRequest() = 0;
 
     /**
-     * Move constructor.
+     * Return a message that can be populated use as a rely message or an
+     * additional request message.
+     *
+     * @return
+     *      Pointer to an OutMessage object associated with this RequestContext;
+     *      the message should only be used with this RequestContext.  Ownership
+     *      is transferred to the caller.
      */
-    ServerOp(ServerOp&& other);
+    virtual Homa::OutMessage* allocOutMessage() = 0;
 
     /**
-     * Default destructor for a ServerOp object.
+     * Send a message back to the initial RooPC requestor.
+     *
+     * @param message
+     *      Response message to return to RooPC initiator.  Ownership of the
+     *      message object is transferred to this ServerTask.
      */
-    ~ServerOp();
+    virtual void reply(Homa::OutMessage* message) = 0;
 
     /**
-     * Move assignment.
-     */
-    ServerOp& operator=(ServerOp&& other);
-
-    /**
-     * Returns true if the ServerOp contains a request; false otherwise.
-     */
-    operator bool() const;
-
-    /**
-     * Check and return the current State of the ServerOp.
-     */
-    State makeProgress();
-
-    /**
-     * Send the outMessage as a response to the initial requestor.
-     */
-    void reply();
-
-    /**
-     * Send the outMessage as a delegated request to the provided destination.
+     * Send a message as an additional request for the associated RooPC.
      *
      * @param destination
-     *      The network address to which the delegated request will be sent.
+     *      Address to which the new request message should be sent.
+     * @param message
+     *      New request message to be sent.  Ownership of the message object is
+     *      transferred to this ServerTask.
      */
-    void delegate(Homa::Driver::Address destination);
+    virtual void delegate(Homa::Driver::Address destination,
+                          Homa::OutMessage* message) = 0;
 
-    /// Message containing an operation request; may come directly from a
-    /// client, or from another server that has delegated the request to us.
-    /// This value will be nullptr if the ServerOp is empty.
-    Homa::InMessage* request;
+    /**
+     * Custom deleter for use with std::unique_ptr.
+     */
+    struct Deleter {
+        void operator()(ServerTask* task)
+        {
+            task->destroy();
+        }
+    };
 
-    /// Message containing the result of processing the operation.  Message can
-    /// be sent as a reply back to the client or delegated to a different server
-    /// for further processing. This value will be nullptr if the ServerOp is
-    /// empty.
-    Homa::OutMessage* response;
-
-  private:
-    /// OpManager that owns this ServerOp.
-    OpManager* transport;
-
-    /// Current state of the ServerOp.
-    std::atomic<State> state;
-
-    /// True if the ServerOp is no longer held by the application and is being
-    /// processed by the OpManager.
-    std::atomic<bool> detached;
-
-    /// Identifier the RemoteOp that triggered this ServerOp.
-    Proto::OpId opId;
-
-    /// Unique identifier for the request message among the set of messages
-    /// associated with a RemoteOp with a given OpId.
-    int32_t stageId;
-
-    /// Address of the client that sent the original request; the reply should
-    /// be sent back to this address.
-    Homa::Driver::Address replyAddress;
-
-    /// True if delegate() was called on this ServerOp.
-    bool delegated;
-
-    // Disable Copy and Assign
-    ServerOp(const ServerOp&) = delete;
-    ServerOp& operator=(const ServerOp&) = delete;
-
-    friend class OpManager;
+  protected:
+    /**
+     * Destruct this ServerTask and free any associated memory.
+     */
+    virtual void destroy() = 0;
 };
 
 /**
- * Provides a means of communicating across the network using the Homa protocol.
- *
- * The transport is used to send and receive messages across the network using
- * the RemoteOp and ServerOp abstractions.  The execution of the transport is
- * driven through repeated calls to the OpManager::poll() method; the transport
- * will not make any progress otherwise.
+ * Manages the RooPCs sent and received through a single transport.
  *
  * This class is thread-safe.
  */
-class OpManager {
+class Session {
   public:
     /**
-     * Construct a new instance of a Homa-based OpManager.
+     * Create a new Session.
      *
-     * @param driver
-     *      Driver with which this transport should send and receive packets.
-     * @param transportId
-     *      This transport's unique identifier in the group of transports among
-     *      which this transport will communicate.
+     * @param transport
+     *      The transport through which message can be sent and received.  The
+     *      created session assumes exclusive access to this transport.
      */
-    OpManager(Homa::Driver* driver, uint64_t transportId);
+    static std::unique_ptr<Session> create(Homa::Transport* transport);
 
     /**
-     * Homa::OpManager destructor.
+     * Allocate a new RooPC that is managed by this session.
      */
-    ~OpManager();
+    virtual Roo::unique_ptr<RooPC> allocRooPC() = 0;
 
     /**
-     * Return a ServerOp of an incoming request that has been received by this
-     * Homa::OpManager. If no request was received, the returned ServerOp will
-     * be empty.
-     */
-    ServerOp receiveServerOp();
-
-    /**
-     * Make incremental progress performing all OpManager functionality.
+     * Check for and return an incoming request.
      *
-     * This method MUST be called for the OpManager to make progress and should
+     * @return
+     *      A request context for an incoming request, if available.  Otherwise,
+     *      an empty pointer returned.
+     */
+    virtual Roo::unique_ptr<ServerTask> receive() = 0;
+
+    /**
+     * Make incremental progress performing Session management.
+     *
+     * This method MUST be called for the Session to make progress and should
      * be called frequently to ensure timely progress.
      */
-    void poll();
-
-    /// The Driver that handles sending and receiving this OpManager's packets.
-    Homa::Driver* const driver;
-
-  private:
-    /// Contains the internal implementation of Homa::OpManager which does most
-    /// of the actual work.  Hides unnecessary details from users of libHoma.
-    std::unique_ptr<Homa::Transport> internal;
-
-    /// Contains the private members of Homa::OpManager.
-    std::unique_ptr<Roo::OpManagerInternal> members;
-
-    // Disable Copy and Assign
-    OpManager(const OpManager&) = delete;
-    OpManager& operator=(const OpManager&) = delete;
-
-    friend class RemoteOp;
-    friend class ServerOp;
+    virtual void poll() = 0;
 };
 
 }  // namespace Roo

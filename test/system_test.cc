@@ -40,7 +40,7 @@ static const char USAGE[] = R"(Homa System Test.
         -h --help       Show this screen.
         --version       Show version.
         -v --verbose    Show verbose output.
-        --hops=<n>      Number of hops an op should make [default: 1].
+        --hops=<n>      Number of hops an RooPC should make [default: 1].
         --servers=<n>   Number of virtual servers [default: 1].
         --size=<n>      Number of bytes to send as a payload [default: 10].
         --lossRate=<f>  Rate at which packets are lost [default: 0.0].
@@ -59,14 +59,22 @@ struct Node {
     explicit Node(uint64_t id)
         : id(id)
         , driver()
-        , transport(&driver, id)
+        , transport(Homa::Transport::create(&driver, id))
+        , session(Roo::Session::create(transport))
         , thread()
         , run(false)
     {}
 
+    ~Node()
+    {
+        session.reset(nullptr);
+        delete transport;
+    }
+
     const uint64_t id;
     Homa::Drivers::Fake::FakeDriver driver;
-    Roo::OpManager transport;
+    Homa::Transport* transport;
+    std::unique_ptr<Roo::Session> session;
     std::thread thread;
     std::atomic<bool> run;
 };
@@ -82,45 +90,49 @@ serverMain(Node* server, std::vector<std::string> addresses)
         if (server->run.load() == false) {
             break;
         }
-        Roo::ServerOp op = server->transport.receiveServerOp();
-        if (op) {
+        Roo::unique_ptr<Roo::ServerTask> task(server->session->receive());
+        if (task) {
             MessageHeader header;
-            op.request->get(0, &header, sizeof(MessageHeader));
+            task->getRequest()->get(0, &header, sizeof(MessageHeader));
 
             char buf[header.length];
-            op.request->get(sizeof(MessageHeader), &buf, header.length);
+            task->getRequest()->get(sizeof(MessageHeader), &buf, header.length);
 
             if (_PRINT_SERVER_) {
                 std::cout << "  -> Server " << server->id
-                          << " (opId: " << header.id << " hops:" << header.hops
+                          << " (rooId: " << header.id << " hops:" << header.hops
                           << ")" << std::endl;
             }
 
             if (_PRINT_SERVER_) {
                 std::cout << "  <- Server " << server->id
-                          << " (opId: " << header.id << " hops:" << header.hops
+                          << " (rooId: " << header.id << " hops:" << header.hops
                           << ")" << std::endl;
             }
 
             header.hops--;
-            op.response->append(&header, sizeof(MessageHeader));
-            op.response->append(buf, header.length);
             if (header.hops == 0) {
-                op.reply();
+                Homa::OutMessage* response = task->allocOutMessage();
+                response->append(&header, sizeof(MessageHeader));
+                response->append(buf, header.length);
+                task->reply(response);
             } else {
+                Homa::OutMessage* request = task->allocOutMessage();
+                request->append(&header, sizeof(MessageHeader));
+                request->append(buf, header.length);
                 std::string nextAddress = addresses[dis(gen)];
                 Homa::Driver::Address nextServerAddress =
                     server->driver.getAddress(&nextAddress);
-                op.delegate(nextServerAddress);
+                task->delegate(nextServerAddress, request);
             }
         }
-        server->transport.poll();
+        server->session->poll();
     }
 }
 
 /**
  * @return
- *      Number of Op that failed.
+ *      Number of RooPCs that failed.
  */
 int
 clientMain(int count, int hops, int size, std::vector<std::string> addresses)
@@ -143,38 +155,40 @@ clientMain(int count, int hops, int size, std::vector<std::string> addresses)
 
         std::string destAddress = addresses[randAddr(gen)];
 
-        Roo::RemoteOp op(&client.transport);
+        Roo::unique_ptr<Roo::RooPC> rpc(client.session->allocRooPC());
+        Homa::OutMessage* request = rpc->allocRequest();
         {
             MessageHeader header;
             header.id = id;
             header.hops = hops;
             header.length = size;
-            op.request->append(&header, sizeof(MessageHeader));
-            op.request->append(payload, size);
+            request->append(&header, sizeof(MessageHeader));
+            request->append(payload, size);
             if (_PRINT_CLIENT_) {
-                std::cout << "Client -> (opId: " << header.id
+                std::cout << "Client -> (rooId: " << header.id
                           << " hops:" << header.hops << ")" << std::endl;
             }
         }
 
-        op.send(client.driver.getAddress(&destAddress));
-        op.wait();
+        rpc->send(client.driver.getAddress(&destAddress), request);
+        rpc->wait();
 
         {
-            if (op.response == nullptr) {
+            if (rpc->checkStatus() == Roo::RooPC::Status::FAILED) {
                 numFailed++;
                 continue;
             }
             MessageHeader header;
             char buf[size];
-            op.response->get(0, &header, sizeof(MessageHeader));
-            op.response->get(sizeof(MessageHeader), &buf, header.length);
+            Homa::InMessage* response = rpc->receive();
+            response->get(0, &header, sizeof(MessageHeader));
+            response->get(sizeof(MessageHeader), &buf, header.length);
             if (header.id != id || header.hops != 0 || header.length != size ||
                 memcmp(payload, buf, size) != 0) {
                 numFailed++;
             }
             if (_PRINT_CLIENT_) {
-                std::cout << "Client <- (opId: " << header.id
+                std::cout << "Client <- (rooId: " << header.id
                           << " hops:" << header.hops << ")" << std::endl;
             }
         }
@@ -244,7 +258,7 @@ main(int argc, char* argv[])
     }
 
     if (printSummary) {
-        std::cout << numTests << " Ops tested (hops: " << numHops
+        std::cout << numTests << " RooPCs tested (hops: " << numHops
                   << "): " << numTests - numFails << " completed, " << numFails
                   << " failed" << std::endl;
     }

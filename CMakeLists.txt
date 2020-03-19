@@ -13,6 +13,9 @@ find_package(Homa REQUIRED)
 add_library(Roo
     src/Debug.cc
     src/Roo.cc
+    src/RooPCImpl.cc
+    src/ServerTaskImpl.cc
+    src/SessionImpl.cc
     src/StringUtil.cc
     src/ThreadId.cc
 )

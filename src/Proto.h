@@ -31,30 +31,30 @@ namespace Roo {
 namespace Proto {
 
 /**
- * A unique identifier for the operation.
+ * A unique identifier for a RooPC.
  */
-struct OpId {
+struct RooId {
     uint64_t transportId;  ///< Uniquely identifies the client transport for
-                           ///< this RemoteOp.
-    uint64_t sequence;     ///< Sequence number for this RemoteOp (unique for
+                           ///< this RooPC.
+    uint64_t sequence;     ///< Sequence number for this RooPC (unique for
                            ///< transportId, monotonically increasing).
 
-    /// OpId default constructor.
-    OpId()
+    /// RooId default constructor.
+    RooId()
         : transportId(0)
         , sequence(0)
     {}
 
-    /// OpId constructor.
-    OpId(uint64_t transportId, uint64_t sequence)
+    /// RooId constructor.
+    RooId(uint64_t transportId, uint64_t sequence)
         : transportId(transportId)
         , sequence(sequence)
     {}
 
     /**
-     * Comparison function for OpId, for use in std::maps etc.
+     * Comparison function for RooId, for use in std::maps etc.
      */
-    bool operator<(OpId other) const
+    bool operator<(RooId other) const
     {
         return (transportId < other.transportId) ||
                ((transportId == other.transportId) &&
@@ -62,37 +62,37 @@ struct OpId {
     }
 
     /**
-     * Equality function for OpId, for use in std::unordered_maps etc.
+     * Equality function for RooId, for use in std::unordered_maps etc.
      */
-    bool operator==(OpId other) const
+    bool operator==(RooId other) const
     {
         return ((transportId == other.transportId) &&
                 (sequence == other.sequence));
     }
 
     /**
-     * This class computes a hash of an OpId, so that OpId can be used
+     * This class computes a hash of an RooId, so that RooId can be used
      * as keys in unordered_maps.
      */
     struct Hasher {
-        /// Return a "hash" of the given OpId.
-        std::size_t operator()(const OpId& opId) const
+        /// Return a "hash" of the given RooId.
+        std::size_t operator()(const RooId& rooId) const
         {
-            std::size_t h1 = std::hash<uint64_t>()(opId.transportId);
-            std::size_t h2 = std::hash<uint64_t>()(opId.sequence);
+            std::size_t h1 = std::hash<uint64_t>()(rooId.transportId);
+            std::size_t h2 = std::hash<uint64_t>()(rooId.sequence);
             return h1 ^ (h2 << 1);
         }
     };
 } __attribute__((packed));
 
 /**
- * Contains the header definitions for a Homa Message; one Op will involve
+ * Contains the header definitions for a Homa Message; one RooPC will involve
  * the sending and receiving of two or more messages.
  */
 namespace Message {
 
-/// Identifier for the Message that contains a RemoteOp's initiating request
-/// RemoteOp (sent by the client).
+/// Identifier for the Message that contains a RooPC's initiating request
+/// RooPC (sent by the client).
 static const int32_t INITIAL_REQUEST_ID = 0;
 /// Identifier for the Message that contains the final reply to the
 /// initial request (sent to the client).
@@ -121,9 +121,9 @@ struct HeaderPrefix {
  */
 struct Header {
     HeaderPrefix prefix;  ///< Common to all versions of the protocol.
-    OpId opId;            ///< Id of the Op to which this message belongs.
+    RooId rooId;          ///< Id of the RooPC to which this message belongs.
     int32_t stageId;  ///< Uniquely identifies this Message within the set of
-                      ///< messages that belong to the RemoteOp.
+                      ///< messages that belong to the RooPC.
     Homa::Driver::WireFormatAddress
         replyAddress;  ///< Replies to this Message should
                        ///< be sent to this address.
@@ -131,15 +131,15 @@ struct Header {
     /// CommonHeader default constructor.
     Header()
         : prefix(1)
-        , opId()
+        , rooId()
         , stageId()
         , replyAddress()
     {}
 
     /// CommonHeader constructor.
-    explicit Header(OpId opId, int32_t stageId)
+    explicit Header(RooId rooId, int32_t stageId)
         : prefix(1)
-        , opId(opId)
+        , rooId(rooId)
         , stageId(stageId)
         , replyAddress()
     {}
