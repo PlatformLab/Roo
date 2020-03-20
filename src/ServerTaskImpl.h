@@ -19,6 +19,8 @@
 #include <Homa/Homa.h>
 #include <Roo/Roo.h>
 
+#include <deque>
+
 #include "Proto.h"
 
 namespace Roo {
@@ -33,13 +35,13 @@ class ServerTaskImpl : public ServerTask {
   public:
     explicit ServerTaskImpl(SessionImpl* session,
                             Proto::Message::Header const* requestHeader,
-                            Homa::InMessage* request);
+                            Homa::unique_ptr<Homa::InMessage> request);
     virtual ~ServerTaskImpl();
     virtual Homa::InMessage* getRequest();
-    virtual Homa::OutMessage* allocOutMessage();
-    virtual void reply(Homa::OutMessage* message);
+    virtual Homa::unique_ptr<Homa::OutMessage> allocOutMessage();
+    virtual void reply(Homa::unique_ptr<Homa::OutMessage> message);
     virtual void delegate(Homa::Driver::Address destination,
-                          Homa::OutMessage* message);
+                          Homa::unique_ptr<Homa::OutMessage> message);
     bool poll();
 
   protected:
@@ -74,7 +76,7 @@ class ServerTaskImpl : public ServerTask {
 
     /// Message containing a task request; may come directly from the RooPC
     /// client, or from another server that has delegated a request to us.
-    Homa::InMessage* const request;
+    Homa::unique_ptr<Homa::InMessage> const request;
 
     /// Address of the client that sent the original request; the reply should
     /// be sent back to this address.
@@ -82,11 +84,13 @@ class ServerTaskImpl : public ServerTask {
 
     /// Message containing the result of processing the operation.  This value
     /// will be nullptr if reply() is not called.
-    Homa::OutMessage* response;
+    Homa::unique_ptr<Homa::OutMessage> response;
 
-    /// Delegated request that has been sent for this RooPC.  This value will be
-    /// nullptr if delegate() is not called.
-    Homa::OutMessage* pendingRequest;
+    /// Delegated requests that have been sent for this RooPC.
+    std::deque<Homa::unique_ptr<Homa::OutMessage>> pendingRequests;
+
+    /// Proto::Delegation that can be sent back to the client.
+    Homa::unique_ptr<Homa::OutMessage> delegationUpdate;
 };
 
 }  // namespace Roo

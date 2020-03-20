@@ -112,18 +112,20 @@ serverMain(Node* server, std::vector<std::string> addresses)
 
             header.hops--;
             if (header.hops == 0) {
-                Homa::OutMessage* response = task->allocOutMessage();
+                Homa::unique_ptr<Homa::OutMessage> response =
+                    task->allocOutMessage();
                 response->append(&header, sizeof(MessageHeader));
                 response->append(buf, header.length);
-                task->reply(response);
+                task->reply(std::move(response));
             } else {
-                Homa::OutMessage* request = task->allocOutMessage();
+                Homa::unique_ptr<Homa::OutMessage> request =
+                    task->allocOutMessage();
                 request->append(&header, sizeof(MessageHeader));
                 request->append(buf, header.length);
                 std::string nextAddress = addresses[dis(gen)];
                 Homa::Driver::Address nextServerAddress =
                     server->driver.getAddress(&nextAddress);
-                task->delegate(nextServerAddress, request);
+                task->delegate(nextServerAddress, std::move(request));
             }
         }
         server->session->poll();
@@ -156,7 +158,7 @@ clientMain(int count, int hops, int size, std::vector<std::string> addresses)
         std::string destAddress = addresses[randAddr(gen)];
 
         Roo::unique_ptr<Roo::RooPC> rpc(client.session->allocRooPC());
-        Homa::OutMessage* request = rpc->allocRequest();
+        Homa::unique_ptr<Homa::OutMessage> request = rpc->allocRequest();
         {
             MessageHeader header;
             header.id = id;
@@ -170,7 +172,7 @@ clientMain(int count, int hops, int size, std::vector<std::string> addresses)
             }
         }
 
-        rpc->send(client.driver.getAddress(&destAddress), request);
+        rpc->send(client.driver.getAddress(&destAddress), std::move(request));
         rpc->wait();
 
         {
@@ -180,11 +182,17 @@ clientMain(int count, int hops, int size, std::vector<std::string> addresses)
             }
             MessageHeader header;
             char buf[size];
-            Homa::InMessage* response = rpc->receive();
+            Homa::unique_ptr<Homa::InMessage> response = rpc->receive();
+            assert(response);
             response->get(0, &header, sizeof(MessageHeader));
             response->get(sizeof(MessageHeader), &buf, header.length);
             if (header.id != id || header.hops != 0 || header.length != size ||
                 memcmp(payload, buf, size) != 0) {
+                std::cout << "Failed sanity check (" << (header.id != id)
+                          << ", " << (header.hops != 0) << ", "
+                          << (header.length != size) << ")" << std::endl;
+                std::cout << "Client <" << header.id << ", " << header.hops
+                          << ", " << header.length << ">" << std::endl;
                 numFailed++;
             }
             if (_PRINT_CLIENT_) {

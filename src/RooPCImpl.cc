@@ -15,6 +15,7 @@
 
 #include "RooPCImpl.h"
 
+#include "Debug.h"
 #include "SessionImpl.h"
 
 namespace Roo {
@@ -25,30 +26,24 @@ namespace Roo {
 RooPCImpl::RooPCImpl(SessionImpl* session, Proto::RooId rooId)
     : session(session)
     , rooId(rooId)
-    , pendingRequest(nullptr)
-    , response(nullptr)
+    , pendingRequests()
+    , responseQueue()
+    , responsesOutstanding(0)
+    , expectedResponses()
 {}
 
 /**
  * RooPCImpl destructor.
  */
-RooPCImpl::~RooPCImpl()
-{
-    if (pendingRequest != nullptr) {
-        pendingRequest->release();
-    }
-    if (response != nullptr) {
-        response->release();
-    }
-}
+RooPCImpl::~RooPCImpl() = default;
 
 /**
  * @copydoc RooPCImpl::allocRequest()
  */
-Homa::OutMessage*
+Homa::unique_ptr<Homa::OutMessage>
 RooPCImpl::allocRequest()
 {
-    Homa::OutMessage* message = session->transport->alloc();
+    Homa::unique_ptr<Homa::OutMessage> message = session->transport->alloc();
     message->reserve(sizeof(Proto::Message::Header));
     return message;
 }
@@ -57,8 +52,10 @@ RooPCImpl::allocRequest()
  * @copydoc RooPCImpl::send()
  */
 void
-RooPCImpl::send(Homa::Driver::Address destination, Homa::OutMessage* request)
+RooPCImpl::send(Homa::Driver::Address destination,
+                Homa::unique_ptr<Homa::OutMessage> request)
 {
+    SpinLock::Lock lock(mutex);
     Homa::Driver::Address replyAddress =
         session->transport->getDriver()->getLocalAddress();
     Proto::RequestId requestId = session->allocRequestId();
@@ -67,16 +64,24 @@ RooPCImpl::send(Homa::Driver::Address destination, Homa::OutMessage* request)
     session->transport->getDriver()->addressToWireFormat(
         replyAddress, &outboundHeader.replyAddress);
     request->prepend(&outboundHeader, sizeof(outboundHeader));
-    pendingRequest = request;
+    expectedResponses.insert({requestId, ResponseStatus::Expected});
+    responsesOutstanding++;
     request->send(destination);
+    pendingRequests.push_back(std::move(request));
 }
 
 /**
  * @copydoc RooPCImpl::receive()
  */
-Homa::InMessage*
+Homa::unique_ptr<Homa::InMessage>
 RooPCImpl::receive()
 {
+    SpinLock::Lock lock(mutex);
+    Homa::unique_ptr<Homa::InMessage> response = nullptr;
+    if (!responseQueue.empty()) {
+        response = std::move(responseQueue.front());
+        responseQueue.pop_front();
+    }
     return response;
 }
 
@@ -86,16 +91,22 @@ RooPCImpl::receive()
 RooPC::Status
 RooPCImpl::checkStatus()
 {
-    if (pendingRequest == nullptr) {
+    SpinLock::Lock lock(mutex);
+    if (pendingRequests.empty()) {
         return Status::NOT_STARTED;
-    } else if (pendingRequest->getStatus() ==
-               Homa::OutMessage::Status::FAILED) {
-        return Status::FAILED;
-    } else if (response == nullptr) {
-        return Status::IN_PROGRESS;
-    } else {
+    } else if (responsesOutstanding == 0) {
         return Status::COMPLETED;
     }
+
+    // Check for failed requests
+    for (auto it = pendingRequests.begin(); it != pendingRequests.end(); ++it) {
+        Homa::OutMessage* request = it->get();
+        if (request->getStatus() == Homa::OutMessage::Status::FAILED) {
+            return Status::FAILED;
+        }
+    }
+
+    return Status::IN_PROGRESS;
 }
 
 /**
@@ -123,14 +134,77 @@ RooPCImpl::destroy()
 /**
  * Add the incoming response message to this RooPC.
  *
+ * @param header
+ *      Preparsed header for the incoming response.
  * @param message
  *      The incoming response message to add.
  */
 void
-RooPCImpl::queueResponse(Homa::InMessage* message)
+RooPCImpl::handleResponse(Proto::Message::Header* header,
+                          Homa::unique_ptr<Homa::InMessage> message)
 {
-    response = message;
-    pendingRequest->cancel();
+    SpinLock::Lock lock(mutex);
+    message->strip(sizeof(Proto::Message::Header));
+    auto ret = expectedResponses.insert(
+        {header->requestId, ResponseStatus::Unexpected});
+    if (ret.second) {
+        // New unanticipated response received.
+        responsesOutstanding++;
+        responseQueue.push_back(std::move(message));
+    } else if (ret.first->second == ResponseStatus::Expected) {
+        // Expected response received.
+        ret.first->second = ResponseStatus::Complete;
+        responsesOutstanding--;
+        responseQueue.push_back(std::move(message));
+    } else {
+        // Response already received
+        NOTICE("Duplicate response received for RooPC (%lu, %lu)",
+               rooId.sessionId, rooId.sequence);
+    }
+}
+
+void
+RooPCImpl::handleDelegation(Proto::Delegation::Header* header,
+                            Homa::unique_ptr<Homa::InMessage> message)
+{
+    SpinLock::Lock lock(mutex);
+    auto ret = expectedResponses.insert(
+        {header->requestId, ResponseStatus::Unexpected});
+    if (ret.second) {
+        // New delegation received.
+        responsesOutstanding++;
+    } else if (ret.first->second == ResponseStatus::Expected) {
+        ret.first->second = ResponseStatus::Complete;
+        responsesOutstanding--;
+    } else {
+        WARNING(
+            "Duplicate delegation confirmation received for RooPC (%lu, %lu)",
+            rooId.sessionId, rooId.sequence);
+        return;
+    }
+
+    // Add new expected requests
+    message->strip(sizeof(Proto::Delegation::Header));
+    for (uint64_t i = 0; i < header->num; ++i) {
+        Proto::RequestId requestId;
+        message->get(sizeof(requestId) * i, &requestId, sizeof(requestId));
+        auto ret =
+            expectedResponses.insert({requestId, ResponseStatus::Expected});
+        if (ret.second) {
+            // Response not yet received.
+            responsesOutstanding++;
+        } else if (ret.first->second == ResponseStatus::Unexpected) {
+            // Response already arrived.
+            ret.first->second = ResponseStatus::Complete;
+            responsesOutstanding--;
+        } else {
+            WARNING(
+                "Duplicate delegation confirmation received for RooPC (%lu, "
+                "%lu)",
+                rooId.sessionId, rooId.sequence);
+        }
+    }
+    message->acknowledge();
 }
 
 }  // namespace Roo

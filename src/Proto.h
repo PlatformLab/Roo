@@ -136,22 +136,6 @@ struct RequestId {
 } __attribute__((packed));
 
 /**
- * Contains the header definitions for a Homa Message; one RooPC will involve
- * the sending and receiving of two or more messages.
- */
-namespace Message {
-
-/**
- * Distinguishes between different types of RooPC messages.
- */
-enum class Type : uint8_t {
-    Initial,   ///< Request sent directly from the RooPC client
-    Request,   ///< Request sent by an intermediate ServerTask
-    Response,  ///< Response sent to the RooPC client
-    Invalid,   ///< No message should be of this type
-};
-
-/**
  * This is the first part of the Homa packet header and is common to all
  * versions of the protocol. The struct contains version information about the
  * protocol used in the encompassing Message. The Transport should always send
@@ -170,10 +154,57 @@ struct HeaderPrefix {
 } __attribute__((packed));
 
 /**
+ * Distinguishes between different protocol messages types.  See the xxx
+ * namespace and xxx::Header for more information.
+ */
+enum class Opcode : uint8_t {
+    Message = 1,
+    Delegation,
+    Invalid,
+};
+
+/**
+ * Contains information needed for all protocol message types.
+ */
+struct HeaderCommon {
+    HeaderPrefix prefix;  ///< Common to all versions of the protocol
+    Opcode opcode;        ///< Distinguishes between different protocol messages
+
+    /// HeaderCommon default constructor.
+    HeaderCommon()
+        : prefix(1)
+        , opcode(Opcode::Invalid)
+    {}
+
+    /// HeaderCommon constructor.
+    HeaderCommon(Opcode opcode)
+        : prefix(1)
+        , opcode(opcode)
+    {}
+} __attribute__((packed));
+
+/**
+ * Contains the header definitions for sending and receiving an application
+ * level Message; one RooPC will involve the sending and receiving of two or
+ * more messages.
+ */
+namespace Message {
+
+/**
+ * Distinguishes between different types of RooPC messages.
+ */
+enum class Type : uint8_t {
+    Initial,   ///< Request sent directly from the RooPC client
+    Request,   ///< Request sent by an intermediate ServerTask
+    Response,  ///< Response sent to the RooPC client
+    Invalid,   ///< No message should be of this type
+};
+
+/**
  * Describes the wire format for header fields for all Message.
  */
 struct Header {
-    HeaderPrefix prefix;  ///< Common to all versions of the protocol.
+    HeaderCommon common;  ///< Common header information.
     RooId rooId;          ///< Id of the RooPC to which this message belongs.
     RequestId requestId;  ///< Id of this message, if this message is a request;
                           ///< or, id of the request to which this message
@@ -183,18 +214,18 @@ struct Header {
         replyAddress;  ///< Replies to this Message should
                        ///< be sent to this address.
 
-    /// CommonHeader default constructor.
+    /// Header default constructor.
     Header()
-        : prefix(1)
+        : common(Opcode::Message)
         , rooId()
         , requestId()
         , type(Type::Invalid)
         , replyAddress()
     {}
 
-    /// CommonHeader constructor.
+    /// Header constructor.
     explicit Header(RooId rooId, RequestId requestId, Type type)
-        : prefix(1)
+        : common(Opcode::Message)
         , rooId(rooId)
         , requestId(requestId)
         , type(type)
@@ -204,6 +235,40 @@ struct Header {
 } __attribute__((packed));
 
 }  // namespace Message
+
+namespace Delegation {
+
+/**
+ * Describes the wire format for the delegation message header
+ */
+struct Header {
+    HeaderCommon common;  ///< Common header information.
+    RooId rooId;          ///< Id of the RooPC to which this message belongs.
+    RequestId requestId;  ///< Id of this message, if this message is a request;
+                          ///< or, id of the request to which this message
+                          ///< responds, if this message is a response.
+    uint64_t num;         ///< Number of delegated requests
+    /// An array of RequestId entries follows this header.
+
+    /// Header default constructor.
+    Header()
+        : common(Opcode::Delegation)
+        , rooId()
+        , requestId()
+        , num(0)
+    {}
+
+    /// Header constructor.
+    explicit Header(RooId rooId, RequestId requestId, uint64_t num)
+        : common(Opcode::Delegation)
+        , rooId(rooId)
+        , requestId(requestId)
+        , num(num)
+    {}
+} __attribute__((packed));
+
+}  // namespace Delegation
+
 }  // namespace Proto
 }  // namespace Roo
 

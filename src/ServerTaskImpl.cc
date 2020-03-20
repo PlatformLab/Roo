@@ -28,32 +28,27 @@ namespace Roo {
  */
 ServerTaskImpl::ServerTaskImpl(SessionImpl* session,
                                Proto::Message::Header const* requestHeader,
-                               Homa::InMessage* request)
+                               Homa::unique_ptr<Homa::InMessage> request)
     : state(State::IN_PROGRESS)
     , detached(false)
     , session(session)
     , rooId(requestHeader->rooId)
     , requestId(requestHeader->requestId)
     , isInitialRequest(requestHeader->type == Proto::Message::Type::Initial)
-    , request(request)
+    , request(std::move(request))
     , replyAddress(session->transport->getDriver()->getAddress(
           &requestHeader->replyAddress))
-    , response(nullptr)
-    , pendingRequest(nullptr)
+    , response()
+    , pendingRequests()
+    , delegationUpdate()
 {
-    request->release();
-    if (response != nullptr) {
-        response->release();
-    }
-    if (pendingRequest != nullptr) {
-        pendingRequest->release();
-    }
+    this->request->strip(sizeof(Proto::Message::Header));
 }
 
 /**
  * ServerTaskImpl destructor.
  */
-ServerTaskImpl::~ServerTaskImpl() {}
+ServerTaskImpl::~ServerTaskImpl() = default;
 
 /**
  * @copydoc ServerTask::getRequest()
@@ -61,16 +56,16 @@ ServerTaskImpl::~ServerTaskImpl() {}
 Homa::InMessage*
 ServerTaskImpl::getRequest()
 {
-    return request;
+    return request.get();
 }
 
 /**
  * @copydoc ServerTask::allocOutMessage()
  */
-Homa::OutMessage*
+Homa::unique_ptr<Homa::OutMessage>
 ServerTaskImpl::allocOutMessage()
 {
-    Homa::OutMessage* message = session->transport->alloc();
+    Homa::unique_ptr<Homa::OutMessage> message = session->transport->alloc();
     message->reserve(sizeof(Proto::Message::Header));
     return message;
 }
@@ -79,13 +74,15 @@ ServerTaskImpl::allocOutMessage()
  * @copydoc ServerTask::reply()
  */
 void
-ServerTaskImpl::reply(Homa::OutMessage* message)
+ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
 {
+    assert(!response);
+    assert(pendingRequests.empty());
     Proto::Message::Header header(rooId, requestId,
                                   Proto::Message::Type::Response);
     session->transport->getDriver()->addressToWireFormat(replyAddress,
                                                          &header.replyAddress);
-    response = message;
+    response = std::move(message);
     response->prepend(&header, sizeof(header));
     response->send(replyAddress);
 }
@@ -95,16 +92,22 @@ ServerTaskImpl::reply(Homa::OutMessage* message)
  */
 void
 ServerTaskImpl::delegate(Homa::Driver::Address destination,
-                         Homa::OutMessage* message)
+                         Homa::unique_ptr<Homa::OutMessage> message)
 {
+    assert(!response);
+    if (!delegationUpdate) {
+        delegationUpdate = std::move(session->transport->alloc());
+        delegationUpdate->reserve(sizeof(Proto::Delegation::Header));
+    }
     Proto::RequestId newRequestId = session->allocRequestId();
     Proto::Message::Header header(rooId, newRequestId,
                                   Proto::Message::Type::Request);
     session->transport->getDriver()->addressToWireFormat(replyAddress,
                                                          &header.replyAddress);
-    pendingRequest = message;
-    pendingRequest->prepend(&header, sizeof(header));
-    pendingRequest->send(destination);
+    message->prepend(&header, sizeof(header));
+    message->send(destination);
+    pendingRequests.push_back(std::move(message));
+    delegationUpdate->append(&newRequestId, sizeof(Proto::RequestId));
 }
 
 /**
@@ -117,52 +120,56 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination,
 bool
 ServerTaskImpl::poll()
 {
-    bool polling = true;
-    State copyOfState = state.load();
-    Homa::OutMessage::Status outState = Homa::OutMessage::Status::NOT_STARTED;
-    if (copyOfState == State::IN_PROGRESS) {
-        if (request->dropped()) {
-            state.store(State::DROPPED);
-        } else if (response != nullptr) {
-            outState = response->getStatus();
-            if (outState == Homa::OutMessage::Status::SENT) {
-                state.store(State::COMPLETED);
-                if (!isInitialRequest) {
-                    request->acknowledge();
-                }
+    if (request->dropped()) {
+        // Nothing left to do
+        return false;
+    } else if (response != nullptr) {
+        // ServerTask sent a reply
+        if (response->getStatus() == Homa::OutMessage::Status::SENT) {
+            // Done
+            if (!isInitialRequest) {
+                request->acknowledge();
             }
-        } else if (pendingRequest != nullptr) {
-            outState = pendingRequest->getStatus();
-            if (outState == Homa::OutMessage::Status::COMPLETED) {
-                state.store(State::COMPLETED);
-                if (!isInitialRequest) {
-                    request->acknowledge();
-                }
-            } else if (outState == Homa::OutMessage::Status::FAILED) {
-                state.store(State::FAILED);
-                // Deregister the outbound message in case the application wants
-                // to try again.
-                pendingRequest->cancel();
+            return false;
+        } else {
+            return true;
+        }
+    } else if (!pendingRequests.empty()) {
+        // ServerTask delegated
+        for (auto it = pendingRequests.begin(); it != pendingRequests.end();
+             ++it) {
+            Homa::OutMessage* pendingRequest = it->get();
+            Homa::OutMessage::Status status = pendingRequest->getStatus();
+            if (status == Homa::OutMessage::Status::COMPLETED) {
+                // Keep checking for other pendingRequests
+            } else if (status == Homa::OutMessage::Status::FAILED) {
+                request->fail();
+                // Failed, no need to keep checking
+                return false;
+            } else {
+                // Unfinished requests; keep polling
+                return true;
             }
         }
-    } else if (copyOfState == State::COMPLETED) {
-        // Nothing to do.
-        polling = false;
-    } else if (copyOfState == State::DROPPED) {
-        // Nothing to do.
-        polling = false;
-    } else if (copyOfState == State::FAILED) {
-        if (detached) {
-            assert(request != nullptr);
-            // If detached, automatically return an ERROR back to the Sender now
-            // that the Server has given up.
+        assert(delegationUpdate);
+        Homa::OutMessage::Status status = delegationUpdate->getStatus();
+        if (status == Homa::OutMessage::Status::FAILED) {
             request->fail();
+            return false;
+        } else if (status != Homa::OutMessage::Status::COMPLETED) {
+            // Keep checking
+            return true;
         }
-        polling = false;
+        // All pending requests the delegationUpdate is complete.
+        if (!isInitialRequest) {
+            request->acknowledge();
+        }
+        return false;
     } else {
-        PANIC("Unknown ServerTask state.");
+        // Nothing left to do
+        return false;
     }
-    return polling;
+    // Can't reach this state
 }
 
 /**
@@ -171,6 +178,16 @@ ServerTaskImpl::poll()
 void
 ServerTaskImpl::destroy()
 {
+    // Send out the delegation information
+    if (!pendingRequests.empty()) {
+        Proto::Delegation::Header delegationHeader(rooId, requestId,
+                                                   pendingRequests.size());
+        assert(delegationUpdate != nullptr);
+        delegationUpdate->prepend(&delegationHeader,
+                                  sizeof(Proto::Delegation::Header));
+        delegationUpdate->send(replyAddress);
+    }
+
     // Don't delete the ServerTask yet.  Just pass it to the session so it can
     // make sure that any outgoing messages are competely sent.
     detached.store(true);

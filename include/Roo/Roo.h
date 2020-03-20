@@ -79,7 +79,7 @@ class RooPC {
      *      A newly allocated message object.  Ownership of the message object
      *      is transferred to the caller.
      */
-    virtual Homa::OutMessage* allocRequest() = 0;
+    virtual Homa::unique_ptr<Homa::OutMessage> allocRequest() = 0;
 
     /**
      * Send a new request for this RooPC asynchronously.
@@ -91,7 +91,7 @@ class RooPC {
      *      is transferred to this RooPC.
      */
     virtual void send(Homa::Driver::Address destination,
-                      Homa::OutMessage* request) = 0;
+                      Homa::unique_ptr<Homa::OutMessage> request) = 0;
 
     /**
      * Return a received response for this RooPC.
@@ -101,7 +101,7 @@ class RooPC {
      *      nullptr is returned.  Ownership of returned response message objects
      *      are transferred to the caller.
      */
-    virtual Homa::InMessage* receive() = 0;
+    virtual Homa::unique_ptr<Homa::InMessage> receive() = 0;
 
     /**
      * Check and return the current Status of this RooPC.
@@ -130,6 +130,16 @@ class RooPC {
 class ServerTask {
   public:
     /**
+     * Custom deleter for use with std::unique_ptr.
+     */
+    struct Deleter {
+        void operator()(ServerTask* task)
+        {
+            task->destroy();
+        }
+    };
+
+    /**
      * Return the incoming request message.
      *
      * @return
@@ -148,7 +158,7 @@ class ServerTask {
      *      the message should only be used with this RequestContext.  Ownership
      *      is transferred to the caller.
      */
-    virtual Homa::OutMessage* allocOutMessage() = 0;
+    virtual Homa::unique_ptr<Homa::OutMessage> allocOutMessage() = 0;
 
     /**
      * Send a message back to the initial RooPC requestor.
@@ -157,7 +167,7 @@ class ServerTask {
      *      Response message to return to RooPC initiator.  Ownership of the
      *      message object is transferred to this ServerTask.
      */
-    virtual void reply(Homa::OutMessage* message) = 0;
+    virtual void reply(Homa::unique_ptr<Homa::OutMessage> message) = 0;
 
     /**
      * Send a message as an additional request for the associated RooPC.
@@ -169,17 +179,7 @@ class ServerTask {
      *      transferred to this ServerTask.
      */
     virtual void delegate(Homa::Driver::Address destination,
-                          Homa::OutMessage* message) = 0;
-
-    /**
-     * Custom deleter for use with std::unique_ptr.
-     */
-    struct Deleter {
-        void operator()(ServerTask* task)
-        {
-            task->destroy();
-        }
-    };
+                          Homa::unique_ptr<Homa::OutMessage> message) = 0;
 
   protected:
     /**

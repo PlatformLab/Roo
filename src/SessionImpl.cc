@@ -15,6 +15,7 @@
 
 #include "SessionImpl.h"
 
+#include "Debug.h"
 #include "RooPCImpl.h"
 #include "ServerTaskImpl.h"
 
@@ -78,26 +79,42 @@ SessionImpl::poll()
 {
     transport->poll();
     // Process incoming messages
-    for (Homa::InMessage* message = transport->receive(); message != nullptr;
-         message = transport->receive()) {
-        Proto::Message::Header header;
-        message->get(0, &header, sizeof(header));
-        message->strip(sizeof(header));
-        if (header.type == Proto::Message::Type::Response) {
-            // Incoming message is a response
+    for (Homa::unique_ptr<Homa::InMessage> message = transport->receive();
+         message; message = std::move(transport->receive())) {
+        Proto::HeaderCommon common;
+        message->get(0, &common, sizeof(common));
+        if (common.opcode == Proto::Opcode::Message) {
+            Proto::Message::Header header;
+            message->get(0, &header, sizeof(header));
+            if (header.type == Proto::Message::Type::Response) {
+                // Incoming message is a response
+                SpinLock::Lock lock_session(mutex);
+                auto it = rpcs.find(header.rooId);
+                if (it != rpcs.end()) {
+                    RooPCImpl* rpc = it->second;
+                    rpc->handleResponse(&header, std::move(message));
+                } else {
+                    // There is no RooPC waiting for this message.
+                }
+            } else {
+                // Incoming message is a request.
+                ServerTaskImpl* task =
+                    new ServerTaskImpl(this, &header, std::move(message));
+                pendingTasks.push_back(task);
+            }
+        } else if (common.opcode == Proto::Opcode::Delegation) {
+            Proto::Delegation::Header header;
+            message->get(0, &header, sizeof(header));
             SpinLock::Lock lock_session(mutex);
             auto it = rpcs.find(header.rooId);
             if (it != rpcs.end()) {
                 RooPCImpl* rpc = it->second;
-                rpc->queueResponse(message);
+                rpc->handleDelegation(&header, std::move(message));
             } else {
-                // There is no RooPC waiting for this message; Drop it.
-                message->release();
+                // There is no RooPC waiting for this message.
             }
         } else {
-            // Incoming message is a request.
-            ServerTaskImpl* task = new ServerTaskImpl(this, &header, message);
-            pendingTasks.push_back(task);
+            WARNING("Unexpected protocol message received.");
         }
     }
     // Check detached ServerTasks

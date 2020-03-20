@@ -18,7 +18,11 @@
 
 #include <Roo/Roo.h>
 
+#include <deque>
+#include <unordered_map>
+
 #include "Proto.h"
+#include "SpinLock.h"
 
 namespace Roo {
 
@@ -32,14 +36,17 @@ class RooPCImpl : public RooPC {
   public:
     explicit RooPCImpl(SessionImpl* session, Proto::RooId rooId);
     virtual ~RooPCImpl();
-    virtual Homa::OutMessage* allocRequest();
+    virtual Homa::unique_ptr<Homa::OutMessage> allocRequest();
     virtual void send(Homa::Driver::Address destination,
-                      Homa::OutMessage* request);
-    virtual Homa::InMessage* receive();
+                      Homa::unique_ptr<Homa::OutMessage> request);
+    virtual Homa::unique_ptr<Homa::InMessage> receive();
     virtual Status checkStatus();
     virtual void wait();
 
-    void queueResponse(Homa::InMessage* message);
+    void handleResponse(Proto::Message::Header* header,
+                        Homa::unique_ptr<Homa::InMessage> message);
+    void handleDelegation(Proto::Delegation::Header* header,
+                          Homa::unique_ptr<Homa::InMessage> message);
 
     /**
      * Return this RooPC's identifier.
@@ -53,17 +60,39 @@ class RooPCImpl : public RooPC {
     virtual void destroy();
 
   private:
+    /// Monitor-style lock
+    SpinLock mutex;
+
     /// Session that manages this RooPC.
     SessionImpl* const session;
 
     /// Unique identifier for this RooPC.
     Proto::RooId rooId;
 
-    /// Request that has been sent for this RooPC.
-    Homa::OutMessage* pendingRequest;
+    /// Requests that have been sent for this RooPC.
+    std::deque<Homa::unique_ptr<Homa::OutMessage> > pendingRequests;
 
-    /// Message containing the result of processing the RooPC request.
-    Homa::InMessage* response;
+    /// Responses for this RooPC that have not yet been delievered.
+    std::deque<Homa::unique_ptr<Homa::InMessage> > responseQueue;
+
+    /// The number of expected responses that have not yet been received.
+    int responsesOutstanding;
+
+    /**
+     * Tracking status for incoming responses.
+     */
+    enum class ResponseStatus {
+        Expected,    ///< Response is expected but not yet received.
+        Unexpected,  ///< Response has been received but the delegation
+                     ///< confirmation for this response has not yet arrived.
+        Complete,    ///< Both the response and the delegation confirmation has
+                     ///< been received.
+    };
+
+    /// Keeps track of the response this RooPC expects to receive.
+    std::unordered_map<Proto::RequestId, ResponseStatus,
+                       Proto::RequestId::Hasher>
+        expectedResponses;
 };
 
 }  // namespace Roo
