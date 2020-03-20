@@ -41,6 +41,7 @@ static const char USAGE[] = R"(Homa System Test.
         --version       Show version.
         -v --verbose    Show verbose output.
         --hops=<n>      Number of hops an RooPC should make [default: 1].
+        --fanout=<n>    Degree of fanout at each hop [default: 1]
         --servers=<n>   Number of virtual servers [default: 1].
         --size=<n>      Number of bytes to send as a payload [default: 10].
         --lossRate=<f>  Rate at which packets are lost [default: 0.0].
@@ -52,6 +53,7 @@ bool _PRINT_SERVER_ = false;
 struct MessageHeader {
     uint64_t id;
     uint64_t hops;
+    uint64_t fanout;
     uint64_t length;
 } __attribute__((packed));
 
@@ -104,12 +106,6 @@ serverMain(Node* server, std::vector<std::string> addresses)
                           << ")" << std::endl;
             }
 
-            if (_PRINT_SERVER_) {
-                std::cout << "  <- Server " << server->id
-                          << " (rooId: " << header.id << " hops:" << header.hops
-                          << ")" << std::endl;
-            }
-
             header.hops--;
             if (header.hops == 0) {
                 Homa::unique_ptr<Homa::OutMessage> response =
@@ -117,15 +113,28 @@ serverMain(Node* server, std::vector<std::string> addresses)
                 response->append(&header, sizeof(MessageHeader));
                 response->append(buf, header.length);
                 task->reply(std::move(response));
+                if (_PRINT_SERVER_) {
+                    std::cout << "  <- Server " << server->id
+                              << " (rooId: " << header.id
+                              << " hops:" << header.hops << ")" << std::endl;
+                }
             } else {
-                Homa::unique_ptr<Homa::OutMessage> request =
-                    task->allocOutMessage();
-                request->append(&header, sizeof(MessageHeader));
-                request->append(buf, header.length);
-                std::string nextAddress = addresses[dis(gen)];
-                Homa::Driver::Address nextServerAddress =
-                    server->driver.getAddress(&nextAddress);
-                task->delegate(nextServerAddress, std::move(request));
+                for (int i = 0; i < 2; ++i) {
+                    Homa::unique_ptr<Homa::OutMessage> request =
+                        task->allocOutMessage();
+                    request->append(&header, sizeof(MessageHeader));
+                    request->append(buf, header.length);
+                    std::string nextAddress = addresses[dis(gen)];
+                    Homa::Driver::Address nextServerAddress =
+                        server->driver.getAddress(&nextAddress);
+                    task->delegate(nextServerAddress, std::move(request));
+                    if (_PRINT_SERVER_) {
+                        std::cout << "  <- Server " << server->id
+                                  << " (rooId: " << header.id
+                                  << " hops:" << header.hops << ")"
+                                  << std::endl;
+                    }
+                }
             }
         }
         server->session->poll();
@@ -137,7 +146,8 @@ serverMain(Node* server, std::vector<std::string> addresses)
  *      Number of RooPCs that failed.
  */
 int
-clientMain(int count, int hops, int size, std::vector<std::string> addresses)
+clientMain(int count, int hops, int fanout, int size,
+           std::vector<std::string> addresses)
 {
     std::random_device rd;
     std::mt19937 gen(rd());
@@ -155,35 +165,38 @@ clientMain(int count, int hops, int size, std::vector<std::string> addresses)
             payload[i] = randData(gen);
         }
 
-        std::string destAddress = addresses[randAddr(gen)];
-
         Roo::unique_ptr<Roo::RooPC> rpc(client.session->allocRooPC());
-        Homa::unique_ptr<Homa::OutMessage> request = rpc->allocRequest();
-        {
-            MessageHeader header;
-            header.id = id;
-            header.hops = hops;
-            header.length = size;
+        MessageHeader header;
+        header.id = id;
+        header.hops = hops;
+        header.fanout = fanout;
+        header.length = size;
+
+        for (int i = 0; i < fanout; ++i) {
+            std::string destAddress = addresses[randAddr(gen)];
+            Homa::unique_ptr<Homa::OutMessage> request = rpc->allocRequest();
             request->append(&header, sizeof(MessageHeader));
             request->append(payload, size);
             if (_PRINT_CLIENT_) {
                 std::cout << "Client -> (rooId: " << header.id
                           << " hops:" << header.hops << ")" << std::endl;
             }
+            rpc->send(client.driver.getAddress(&destAddress),
+                      std::move(request));
         }
 
-        rpc->send(client.driver.getAddress(&destAddress), std::move(request));
         rpc->wait();
 
-        {
-            if (rpc->checkStatus() == Roo::RooPC::Status::FAILED) {
-                numFailed++;
-                continue;
-            }
+        if (rpc->checkStatus() == Roo::RooPC::Status::FAILED) {
+            numFailed++;
+            std::cout << "RooPC FAILED" << std::endl;
+            continue;
+        }
+
+        Homa::unique_ptr<Homa::InMessage> response = rpc->receive();
+        while (response) {
             MessageHeader header;
             char buf[size];
-            Homa::unique_ptr<Homa::InMessage> response = rpc->receive();
-            assert(response);
             response->get(0, &header, sizeof(MessageHeader));
             response->get(sizeof(MessageHeader), &buf, header.length);
             if (header.id != id || header.hops != 0 || header.length != size ||
@@ -199,6 +212,7 @@ clientMain(int count, int hops, int size, std::vector<std::string> addresses)
                 std::cout << "Client <- (rooId: " << header.id
                           << " hops:" << header.hops << ")" << std::endl;
             }
+            response = std::move(rpc->receive());
         }
     }
     return numFailed;
@@ -215,6 +229,7 @@ main(int argc, char* argv[])
     // Read in args.
     int numTests = args["<count>"].asLong();
     int numHops = args["--hops"].asLong();
+    int numFanout = args["--fanout"].asLong();
     int numServers = args["--servers"].asLong();
     int numBytes = args["--size"].asLong();
     int verboseLevel = args["--verbose"].asLong();
@@ -256,7 +271,8 @@ main(int argc, char* argv[])
         server->thread = std::move(std::thread(&serverMain, server, addresses));
     }
 
-    int numFails = clientMain(numTests, numHops, numBytes, addresses);
+    int numFails =
+        clientMain(numTests, numHops, numFanout, numBytes, addresses);
 
     for (auto it = servers.begin(); it != servers.end(); ++it) {
         Node* server = *it;
