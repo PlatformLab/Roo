@@ -26,14 +26,14 @@
 namespace Roo {
 
 // Forward declaration
-class SessionImpl;
+class SocketImpl;
 
 /**
  * Implementation of Roo::ServerTask.
  */
 class ServerTaskImpl : public ServerTask {
   public:
-    explicit ServerTaskImpl(SessionImpl* session,
+    explicit ServerTaskImpl(SocketImpl* socket,
                             Proto::Message::Header const* requestHeader,
                             Homa::unique_ptr<Homa::InMessage> request);
     virtual ~ServerTaskImpl();
@@ -59,11 +59,11 @@ class ServerTaskImpl : public ServerTask {
     std::atomic<State> state;
 
     /// True if the ServerTask is no longer held by the application and is being
-    /// processed by the Session.
+    /// processed by the Socket.
     std::atomic<bool> detached;
 
-    // The session that manages this ServerTask.
-    SessionImpl* const session;
+    // The socket that manages this ServerTask.
+    SocketImpl* const socket;
 
     /// Identifier the RooPC that triggered this ServerTask.
     Proto::RooId const rooId;

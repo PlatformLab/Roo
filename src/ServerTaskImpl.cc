@@ -16,27 +16,27 @@
 #include "ServerTaskImpl.h"
 
 #include "Debug.h"
-#include "SessionImpl.h"
+#include "SocketImpl.h"
 
 namespace Roo {
 
 /**
  * ServerTaskImpl constructor.
  *
- * @param session
+ * @param socket
  * @param rooId
  */
-ServerTaskImpl::ServerTaskImpl(SessionImpl* session,
+ServerTaskImpl::ServerTaskImpl(SocketImpl* socket,
                                Proto::Message::Header const* requestHeader,
                                Homa::unique_ptr<Homa::InMessage> request)
     : state(State::IN_PROGRESS)
     , detached(false)
-    , session(session)
+    , socket(socket)
     , rooId(requestHeader->rooId)
     , requestId(requestHeader->requestId)
     , isInitialRequest(requestHeader->type == Proto::Message::Type::Initial)
     , request(std::move(request))
-    , replyAddress(session->transport->getDriver()->getAddress(
+    , replyAddress(socket->transport->getDriver()->getAddress(
           &requestHeader->replyAddress))
     , response()
     , pendingRequests()
@@ -65,7 +65,7 @@ ServerTaskImpl::getRequest()
 Homa::unique_ptr<Homa::OutMessage>
 ServerTaskImpl::allocOutMessage()
 {
-    Homa::unique_ptr<Homa::OutMessage> message = session->transport->alloc();
+    Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
     message->reserve(sizeof(Proto::Message::Header));
     return message;
 }
@@ -80,7 +80,7 @@ ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
     assert(pendingRequests.empty());
     Proto::Message::Header header(rooId, requestId,
                                   Proto::Message::Type::Response);
-    session->transport->getDriver()->addressToWireFormat(replyAddress,
+    socket->transport->getDriver()->addressToWireFormat(replyAddress,
                                                          &header.replyAddress);
     response = std::move(message);
     response->prepend(&header, sizeof(header));
@@ -96,13 +96,13 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination,
 {
     assert(!response);
     if (!delegationUpdate) {
-        delegationUpdate = std::move(session->transport->alloc());
+        delegationUpdate = std::move(socket->transport->alloc());
         delegationUpdate->reserve(sizeof(Proto::Delegation::Header));
     }
-    Proto::RequestId newRequestId = session->allocRequestId();
+    Proto::RequestId newRequestId = socket->allocRequestId();
     Proto::Message::Header header(rooId, newRequestId,
                                   Proto::Message::Type::Request);
-    session->transport->getDriver()->addressToWireFormat(replyAddress,
+    socket->transport->getDriver()->addressToWireFormat(replyAddress,
                                                          &header.replyAddress);
     message->prepend(&header, sizeof(header));
     message->send(destination);
@@ -188,10 +188,10 @@ ServerTaskImpl::destroy()
         delegationUpdate->send(replyAddress);
     }
 
-    // Don't delete the ServerTask yet.  Just pass it to the session so it can
+    // Don't delete the ServerTask yet.  Just pass it to the socket so it can
     // make sure that any outgoing messages are competely sent.
     detached.store(true);
-    session->remandTask(this);
+    socket->remandTask(this);
 }
 
 }  // namespace Roo

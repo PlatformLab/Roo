@@ -27,14 +27,14 @@
 namespace Roo {
 
 // Forward Declaration
-class SessionImpl;
+class SocketImpl;
 
 /**
  * Implementation of RooPC.
  */
 class RooPCImpl : public RooPC {
   public:
-    explicit RooPCImpl(SessionImpl* session, Proto::RooId rooId);
+    explicit RooPCImpl(SocketImpl* socket, Proto::RooId rooId);
     virtual ~RooPCImpl();
     virtual Homa::unique_ptr<Homa::OutMessage> allocRequest();
     virtual void send(Homa::Driver::Address destination,
@@ -63,8 +63,8 @@ class RooPCImpl : public RooPC {
     /// Monitor-style lock
     SpinLock mutex;
 
-    /// Session that manages this RooPC.
-    SessionImpl* const session;
+    /// Socket that manages this RooPC.
+    SocketImpl* const socket;
 
     /// Unique identifier for this RooPC.
     Proto::RooId rooId;

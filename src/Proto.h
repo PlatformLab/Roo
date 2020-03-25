@@ -34,20 +34,20 @@ namespace Proto {
  * A unique identifier for a RooPC.
  */
 struct RooId {
-    uint64_t sessionId;  ///< Uniquely identifies the client transport for
+    uint64_t socketId;  ///< Uniquely identifies the client transport for
                          ///< this RooPC.
     uint64_t sequence;   ///< Sequence number for this RooPC (unique for
-                         ///< sessionId, monotonically increasing).
+                         ///< socketId, monotonically increasing).
 
     /// RooId default constructor.
     RooId()
-        : sessionId(0)
+        : socketId(0)
         , sequence(0)
     {}
 
     /// RooId constructor.
-    RooId(uint64_t sessionId, uint64_t sequence)
-        : sessionId(sessionId)
+    RooId(uint64_t socketId, uint64_t sequence)
+        : socketId(socketId)
         , sequence(sequence)
     {}
 
@@ -56,8 +56,8 @@ struct RooId {
      */
     bool operator<(RooId other) const
     {
-        return (sessionId < other.sessionId) ||
-               ((sessionId == other.sessionId) && (sequence < other.sequence));
+        return (socketId < other.socketId) ||
+               ((socketId == other.socketId) && (sequence < other.sequence));
     }
 
     /**
@@ -65,7 +65,7 @@ struct RooId {
      */
     bool operator==(RooId other) const
     {
-        return ((sessionId == other.sessionId) && (sequence == other.sequence));
+        return ((socketId == other.socketId) && (sequence == other.sequence));
     }
 
     /**
@@ -76,7 +76,7 @@ struct RooId {
         /// Return a "hash" of the given RooId.
         std::size_t operator()(const RooId& rooId) const
         {
-            std::size_t h1 = std::hash<uint64_t>()(rooId.sessionId);
+            std::size_t h1 = std::hash<uint64_t>()(rooId.socketId);
             std::size_t h2 = std::hash<uint64_t>()(rooId.sequence);
             return h1 ^ (h2 << 1);
         }
@@ -87,19 +87,19 @@ struct RooId {
  * A unique identifier for a Request.
  */
 struct RequestId {
-    uint64_t sessionId;  ///< Unique id for session that sent this request.
+    uint64_t socketId;  ///< Unique id for socket that sent this request.
     uint64_t sequence;   ///< Sequence number for this request (unique for
-                         ///< sessionId, monotonically increasing).
+                         ///< socketId, monotonically increasing).
 
     /// RequestId default constructor.
     RequestId()
-        : sessionId(0)
+        : socketId(0)
         , sequence(0)
     {}
 
     /// RequestId constructor.
-    RequestId(uint64_t sessionId, uint64_t sequence)
-        : sessionId(sessionId)
+    RequestId(uint64_t socketId, uint64_t sequence)
+        : socketId(socketId)
         , sequence(sequence)
     {}
 
@@ -108,8 +108,8 @@ struct RequestId {
      */
     bool operator<(RequestId other) const
     {
-        return (sessionId < other.sessionId) ||
-               ((sessionId == other.sessionId) && (sequence < other.sequence));
+        return (socketId < other.socketId) ||
+               ((socketId == other.socketId) && (sequence < other.sequence));
     }
 
     /**
@@ -117,7 +117,7 @@ struct RequestId {
      */
     bool operator==(RequestId other) const
     {
-        return ((sessionId == other.sessionId) && (sequence == other.sequence));
+        return ((socketId == other.socketId) && (sequence == other.sequence));
     }
 
     /**
@@ -128,7 +128,7 @@ struct RequestId {
         /// Return a "hash" of the given RequestId.
         std::size_t operator()(const RequestId& requestId) const
         {
-            std::size_t h1 = std::hash<uint64_t>()(requestId.sessionId);
+            std::size_t h1 = std::hash<uint64_t>()(requestId.socketId);
             std::size_t h2 = std::hash<uint64_t>()(requestId.sequence);
             return h1 ^ (h2 << 1);
         }

@@ -13,8 +13,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef ROO_SESSIONIMPL_H
-#define ROO_SESSIONIMPL_H
+#ifndef ROO_SOCKETIMPL_H
+#define ROO_SOCKETIMPL_H
 
 #include <Homa/Homa.h>
 #include <Roo/Roo.h>
@@ -35,12 +35,12 @@ class RooPCImpl;
 class ServerTaskImpl;
 
 /**
- * Implementation of Roo::Session.
+ * Implementation of Roo::Socket.
  */
-class SessionImpl : public Session {
+class SocketImpl : public Socket {
   public:
-    explicit SessionImpl(Homa::Transport* transport);
-    virtual ~SessionImpl();
+    explicit SocketImpl(Homa::Transport* transport);
+    virtual ~SocketImpl();
     virtual Roo::unique_ptr<RooPC> allocRooPC();
     virtual Roo::unique_ptr<ServerTask> receive();
     virtual void poll();
@@ -53,17 +53,17 @@ class SessionImpl : public Session {
     Homa::Transport* const transport;
 
   private:
-    /// Identifer for this session.  This identifer must be unique among all
-    /// sessions that might communicate.
-    uint64_t const sessionId;
+    /// Identifer for this socket.  This identifer must be unique among all
+    /// sockets that might communicate.
+    uint64_t const socketId;
 
-    /// Used to generate session unique identifiers.
+    /// Used to generate socket unique identifiers.
     std::atomic<uint64_t> nextSequenceNumber;
 
     // Monitor style mutex.
     SpinLock mutex;
 
-    /// Tracks the set of RooPC objects that were initiated by this session.
+    /// Tracks the set of RooPC objects that were initiated by this socket.
     std::unordered_map<Proto::RooId, RooPCImpl*, Proto::RooId::Hasher> rpcs;
 
     /// Collection of ServerTask objects (incoming requests) that haven't been
@@ -71,10 +71,10 @@ class SessionImpl : public Session {
     std::deque<ServerTaskImpl*> pendingTasks;
 
     /// ServerTask objects that have been processed by the application and
-    /// remanded to the care of the Session to complete transmission.
+    /// remanded to the care of the Socket to complete transmission.
     std::deque<ServerTaskImpl*> detachedTasks;
 };
 
 }  // namespace Roo
 
-#endif  // ROO_SESSIONIMPL_H
+#endif  // ROO_SOCKETIMPL_H

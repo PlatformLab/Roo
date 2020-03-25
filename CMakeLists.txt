@@ -15,7 +15,7 @@ add_library(Roo
     src/Roo.cc
     src/RooPCImpl.cc
     src/ServerTaskImpl.cc
-    src/SessionImpl.cc
+    src/SocketImpl.cc
     src/StringUtil.cc
     src/ThreadId.cc
 )

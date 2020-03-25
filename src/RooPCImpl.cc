@@ -16,15 +16,15 @@
 #include "RooPCImpl.h"
 
 #include "Debug.h"
-#include "SessionImpl.h"
+#include "SocketImpl.h"
 
 namespace Roo {
 
 /**
  * RooPCImpl constructor.
  */
-RooPCImpl::RooPCImpl(SessionImpl* session, Proto::RooId rooId)
-    : session(session)
+RooPCImpl::RooPCImpl(SocketImpl* socket, Proto::RooId rooId)
+    : socket(socket)
     , rooId(rooId)
     , pendingRequests()
     , responseQueue()
@@ -43,7 +43,7 @@ RooPCImpl::~RooPCImpl() = default;
 Homa::unique_ptr<Homa::OutMessage>
 RooPCImpl::allocRequest()
 {
-    Homa::unique_ptr<Homa::OutMessage> message = session->transport->alloc();
+    Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
     message->reserve(sizeof(Proto::Message::Header));
     return message;
 }
@@ -57,11 +57,11 @@ RooPCImpl::send(Homa::Driver::Address destination,
 {
     SpinLock::Lock lock(mutex);
     Homa::Driver::Address replyAddress =
-        session->transport->getDriver()->getLocalAddress();
-    Proto::RequestId requestId = session->allocRequestId();
+        socket->transport->getDriver()->getLocalAddress();
+    Proto::RequestId requestId = socket->allocRequestId();
     Proto::Message::Header outboundHeader(rooId, requestId,
                                           Proto::Message::Type::Initial);
-    session->transport->getDriver()->addressToWireFormat(
+    socket->transport->getDriver()->addressToWireFormat(
         replyAddress, &outboundHeader.replyAddress);
     request->prepend(&outboundHeader, sizeof(outboundHeader));
     expectedResponses.insert({requestId, ResponseStatus::Expected});
@@ -116,7 +116,7 @@ void
 RooPCImpl::wait()
 {
     while (checkStatus() == Status::IN_PROGRESS) {
-        session->poll();
+        socket->poll();
     }
 }
 
@@ -127,8 +127,8 @@ void
 RooPCImpl::destroy()
 {
     // Don't actually free the object yet.  Return contol to the managing
-    // session so it can do some clean up.
-    session->dropRooPC(this);
+    // socket so it can do some clean up.
+    socket->dropRooPC(this);
 }
 
 /**
@@ -159,7 +159,7 @@ RooPCImpl::handleResponse(Proto::Message::Header* header,
     } else {
         // Response already received
         NOTICE("Duplicate response received for RooPC (%lu, %lu)",
-               rooId.sessionId, rooId.sequence);
+               rooId.socketId, rooId.sequence);
     }
 }
 
@@ -179,7 +179,7 @@ RooPCImpl::handleDelegation(Proto::Delegation::Header* header,
     } else {
         WARNING(
             "Duplicate delegation confirmation received for RooPC (%lu, %lu)",
-            rooId.sessionId, rooId.sequence);
+            rooId.socketId, rooId.sequence);
         return;
     }
 
@@ -201,7 +201,7 @@ RooPCImpl::handleDelegation(Proto::Delegation::Header* header,
             WARNING(
                 "Duplicate delegation confirmation received for RooPC (%lu, "
                 "%lu)",
-                rooId.sessionId, rooId.sequence);
+                rooId.socketId, rooId.sequence);
         }
     }
     message->acknowledge();

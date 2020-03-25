@@ -62,21 +62,21 @@ struct Node {
         : id(id)
         , driver()
         , transport(Homa::Transport::create(&driver, id))
-        , session(Roo::Session::create(transport))
+        , socket(Roo::Socket::create(transport))
         , thread()
         , run(false)
     {}
 
     ~Node()
     {
-        session.reset(nullptr);
+        socket.reset(nullptr);
         delete transport;
     }
 
     const uint64_t id;
     Homa::Drivers::Fake::FakeDriver driver;
     Homa::Transport* transport;
-    std::unique_ptr<Roo::Session> session;
+    std::unique_ptr<Roo::Socket> socket;
     std::thread thread;
     std::atomic<bool> run;
 };
@@ -92,7 +92,7 @@ serverMain(Node* server, std::vector<std::string> addresses)
         if (server->run.load() == false) {
             break;
         }
-        Roo::unique_ptr<Roo::ServerTask> task(server->session->receive());
+        Roo::unique_ptr<Roo::ServerTask> task(server->socket->receive());
         if (task) {
             MessageHeader header;
             task->getRequest()->get(0, &header, sizeof(MessageHeader));
@@ -137,7 +137,7 @@ serverMain(Node* server, std::vector<std::string> addresses)
                 }
             }
         }
-        server->session->poll();
+        server->socket->poll();
     }
 }
 
@@ -165,7 +165,7 @@ clientMain(int count, int hops, int fanout, int size,
             payload[i] = randData(gen);
         }
 
-        Roo::unique_ptr<Roo::RooPC> rpc(client.session->allocRooPC());
+        Roo::unique_ptr<Roo::RooPC> rpc(client.socket->allocRooPC());
         MessageHeader header;
         header.id = id;
         header.hops = hops;

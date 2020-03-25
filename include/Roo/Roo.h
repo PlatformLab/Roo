@@ -27,7 +27,7 @@
 namespace Roo {
 
 // Forward declarations
-class Session;
+class Socket;
 
 /**
  * Shorthand for an std::unique_ptr with a customized deleter.
@@ -193,19 +193,19 @@ class ServerTask {
  *
  * This class is thread-safe.
  */
-class Session {
+class Socket {
   public:
     /**
-     * Create a new Session.
+     * Create a new Socket.
      *
      * @param transport
      *      The transport through which message can be sent and received.  The
-     *      created session assumes exclusive access to this transport.
+     *      created socket assumes exclusive access to this transport.
      */
-    static std::unique_ptr<Session> create(Homa::Transport* transport);
+    static std::unique_ptr<Socket> create(Homa::Transport* transport);
 
     /**
-     * Allocate a new RooPC that is managed by this session.
+     * Allocate a new RooPC that is managed by this socket.
      */
     virtual Roo::unique_ptr<RooPC> allocRooPC() = 0;
 
@@ -219,9 +219,9 @@ class Session {
     virtual Roo::unique_ptr<ServerTask> receive() = 0;
 
     /**
-     * Make incremental progress performing Session management.
+     * Make incremental progress performing Socket management.
      *
-     * This method MUST be called for the Session to make progress and should
+     * This method MUST be called for the Socket to make progress and should
      * be called frequently to ensure timely progress.
      */
     virtual void poll() = 0;

@@ -15,14 +15,14 @@
 
 #include <Roo/Roo.h>
 
-#include "SessionImpl.h"
+#include "SocketImpl.h"
 
 namespace Roo {
 
-std::unique_ptr<Session>
-Session::create(Homa::Transport* transport)
+std::unique_ptr<Socket>
+Socket::create(Homa::Transport* transport)
 {
-    return std::unique_ptr<Session>(new SessionImpl(transport));
+    return std::unique_ptr<Socket>(new SocketImpl(transport));
 }
 
 }  // namespace Roo

@@ -13,7 +13,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include "SessionImpl.h"
+#include "SocketImpl.h"
 
 #include "Debug.h"
 #include "RooPCImpl.h"
@@ -22,14 +22,14 @@
 namespace Roo {
 
 /**
- * Construct a SessionImpl.
+ * Construct a SocketImpl.
  *
  * @param transport
- *      Homa transport to which this session has exclusive access.
+ *      Homa transport to which this socket has exclusive access.
  */
-SessionImpl::SessionImpl(Homa::Transport* transport)
+SocketImpl::SocketImpl(Homa::Transport* transport)
     : transport(transport)
-    , sessionId(transport->getId())
+    , socketId(transport->getId())
     , nextSequenceNumber(1)
     , mutex()
     , rpcs()
@@ -38,31 +38,31 @@ SessionImpl::SessionImpl(Homa::Transport* transport)
 {}
 
 /**
- * SessionImpl destructor.
+ * SocketImpl destructor.
  */
-SessionImpl::~SessionImpl() {}
+SocketImpl::~SocketImpl() {}
 
 /**
- * @copydoc Roo::Session::allocRooPC()
+ * @copydoc Roo::Socket::allocRooPC()
  */
 Roo::unique_ptr<RooPC>
-SessionImpl::allocRooPC()
+SocketImpl::allocRooPC()
 {
-    SpinLock::Lock lock_session(mutex);
+    SpinLock::Lock lock_socket(mutex);
     Proto::RooId rooId = Proto::RooId(
-        sessionId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
+        socketId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
     RooPCImpl* rpc = new RooPCImpl(this, rooId);
     rpcs.insert({rooId, rpc});
     return Roo::unique_ptr<RooPC>(rpc);
 }
 
 /**
- * @copydoc Roo::Session::receive()
+ * @copydoc Roo::Socket::receive()
  */
 Roo::unique_ptr<ServerTask>
-SessionImpl::receive()
+SocketImpl::receive()
 {
-    SpinLock::Lock lock_session(mutex);
+    SpinLock::Lock lock_socket(mutex);
     Roo::unique_ptr<ServerTask> task;
     if (!pendingTasks.empty()) {
         task = Roo::unique_ptr<ServerTask>(pendingTasks.front());
@@ -72,10 +72,10 @@ SessionImpl::receive()
 }
 
 /**
- * @copydoc Roo::Session::poll()
+ * @copydoc Roo::Socket::poll()
  */
 void
-SessionImpl::poll()
+SocketImpl::poll()
 {
     transport->poll();
     // Process incoming messages
@@ -88,7 +88,7 @@ SessionImpl::poll()
             message->get(0, &header, sizeof(header));
             if (header.type == Proto::Message::Type::Response) {
                 // Incoming message is a response
-                SpinLock::Lock lock_session(mutex);
+                SpinLock::Lock lock_socket(mutex);
                 auto it = rpcs.find(header.rooId);
                 if (it != rpcs.end()) {
                     RooPCImpl* rpc = it->second;
@@ -105,7 +105,7 @@ SessionImpl::poll()
         } else if (common.opcode == Proto::Opcode::Delegation) {
             Proto::Delegation::Header header;
             message->get(0, &header, sizeof(header));
-            SpinLock::Lock lock_session(mutex);
+            SpinLock::Lock lock_socket(mutex);
             auto it = rpcs.find(header.rooId);
             if (it != rpcs.end()) {
                 RooPCImpl* rpc = it->second;
@@ -119,7 +119,7 @@ SessionImpl::poll()
     }
     // Check detached ServerTasks
     {
-        SpinLock::Lock lock_session(mutex);
+        SpinLock::Lock lock_socket(mutex);
         auto it = detachedTasks.begin();
         while (it != detachedTasks.end()) {
             ServerTaskImpl* task = *it;
@@ -139,31 +139,31 @@ SessionImpl::poll()
  * Return a new unique RequestId.
  */
 Proto::RequestId
-SessionImpl::allocRequestId()
+SocketImpl::allocRequestId()
 {
     return Proto::RequestId(
-        sessionId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
+        socketId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
 }
 
 /**
  * Discard a previously allocated RooPC.
  */
 void
-SessionImpl::dropRooPC(RooPCImpl* rpc)
+SocketImpl::dropRooPC(RooPCImpl* rpc)
 {
-    SpinLock::Lock lock_session(mutex);
+    SpinLock::Lock lock_socket(mutex);
     rpcs.erase(rpc->getId());
     delete rpc;
 }
 
 /**
- * Pass custody of a detached ServerTask to this session so that this session
+ * Pass custody of a detached ServerTask to this socket so that this socket
  * can ensure its outbound message are completely sent.
  */
 void
-SessionImpl::remandTask(ServerTaskImpl* task)
+SocketImpl::remandTask(ServerTaskImpl* task)
 {
-    SpinLock::Lock lock_session(mutex);
+    SpinLock::Lock lock_socket(mutex);
     detachedTasks.push_back(task);
 }
 
