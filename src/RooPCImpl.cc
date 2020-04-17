@@ -144,6 +144,7 @@ RooPCImpl::handleResponse(Proto::Message::Header* header,
                           Homa::unique_ptr<Homa::InMessage> message)
 {
     SpinLock::Lock lock(mutex);
+    message->acknowledge();
     message->strip(sizeof(Proto::Message::Header));
     auto ret = expectedResponses.insert(
         {header->requestId, ResponseStatus::Unexpected});

@@ -81,7 +81,7 @@ ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
     Proto::Message::Header header(rooId, requestId,
                                   Proto::Message::Type::Response);
     socket->transport->getDriver()->addressToWireFormat(replyAddress,
-                                                         &header.replyAddress);
+                                                        &header.replyAddress);
     response = std::move(message);
     response->prepend(&header, sizeof(header));
     response->send(replyAddress);
@@ -103,7 +103,7 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination,
     Proto::Message::Header header(rooId, newRequestId,
                                   Proto::Message::Type::Request);
     socket->transport->getDriver()->addressToWireFormat(replyAddress,
-                                                         &header.replyAddress);
+                                                        &header.replyAddress);
     message->prepend(&header, sizeof(header));
     message->send(destination);
     pendingRequests.push_back(std::move(message));
@@ -125,7 +125,7 @@ ServerTaskImpl::poll()
         return false;
     } else if (response != nullptr) {
         // ServerTask sent a reply
-        if (response->getStatus() == Homa::OutMessage::Status::SENT) {
+        if (response->getStatus() == Homa::OutMessage::Status::COMPLETED) {
             // Done
             if (!isInitialRequest) {
                 request->acknowledge();
