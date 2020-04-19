@@ -45,7 +45,7 @@ class SocketImpl : public Socket {
     virtual Roo::unique_ptr<ServerTask> receive();
     virtual void poll();
 
-    Proto::RequestId allocRequestId();
+    Proto::TaskId allocTaskId();
     void dropRooPC(RooPCImpl* rpc);
     void remandTask(ServerTaskImpl* task);
 

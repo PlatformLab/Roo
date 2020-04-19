@@ -49,8 +49,7 @@ Roo::unique_ptr<RooPC>
 SocketImpl::allocRooPC()
 {
     SpinLock::Lock lock_socket(mutex);
-    Proto::RooId rooId = Proto::RooId(
-        socketId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
+    Proto::RooId rooId = allocTaskId();
     RooPCImpl* rpc = new RooPCImpl(this, rooId);
     rpcs.insert({rooId, rpc});
     return Roo::unique_ptr<RooPC>(rpc);
@@ -83,35 +82,35 @@ SocketImpl::poll()
          message; message = std::move(transport->receive())) {
         Proto::HeaderCommon common;
         message->get(0, &common, sizeof(common));
-        if (common.opcode == Proto::Opcode::Message) {
-            Proto::Message::Header header;
+        if (common.opcode == Proto::Opcode::Request) {
+            // Incoming message is a request.
+            Proto::RequestHeader header;
             message->get(0, &header, sizeof(header));
-            if (header.type == Proto::Message::Type::Response) {
-                // Incoming message is a response
-                SpinLock::Lock lock_socket(mutex);
-                auto it = rpcs.find(header.rooId);
-                if (it != rpcs.end()) {
-                    RooPCImpl* rpc = it->second;
-                    rpc->handleResponse(&header, std::move(message));
-                } else {
-                    // There is no RooPC waiting for this message.
-                }
-            } else {
-                // Incoming message is a request.
-                ServerTaskImpl* task =
-                    new ServerTaskImpl(this, &header, std::move(message));
-                pendingTasks.push_back(task);
-            }
-        } else if (common.opcode == Proto::Opcode::Delegation) {
-            Proto::Delegation::Header header;
+            ServerTaskImpl* task =
+                new ServerTaskImpl(this, &header, std::move(message));
+            pendingTasks.push_back(task);
+        } else if (common.opcode == Proto::Opcode::Response) {
+            // Incoming message is a response
+            Proto::ResponseHeader header;
             message->get(0, &header, sizeof(header));
             SpinLock::Lock lock_socket(mutex);
             auto it = rpcs.find(header.rooId);
             if (it != rpcs.end()) {
                 RooPCImpl* rpc = it->second;
-                rpc->handleDelegation(&header, std::move(message));
+                rpc->handleResponse(&header, std::move(message));
             } else {
                 // There is no RooPC waiting for this message.
+            }
+        } else if (common.opcode == Proto::Opcode::Manifest) {
+            Proto::Manifest manifest;
+            message->get(0, &manifest, sizeof(manifest));
+            SpinLock::Lock lock_socket(mutex);
+            auto it = rpcs.find(manifest.rooId);
+            if (it != rpcs.end()) {
+                RooPCImpl* rpc = it->second;
+                rpc->handleManifest(&manifest, std::move(message));
+            } else {
+                // There is no RooPC waiting for this manifest.
             }
         } else {
             WARNING("Unexpected protocol message received.");
@@ -136,12 +135,12 @@ SocketImpl::poll()
 }
 
 /**
- * Return a new unique RequestId.
+ * Return a new unique TaskId.
  */
-Proto::RequestId
-SocketImpl::allocRequestId()
+Proto::TaskId
+SocketImpl::allocTaskId()
 {
-    return Proto::RequestId(
+    return Proto::TaskId(
         socketId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
 }
 

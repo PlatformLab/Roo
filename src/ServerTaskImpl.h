@@ -30,11 +30,13 @@ class SocketImpl;
 
 /**
  * Implementation of Roo::ServerTask.
+ *
+ * This class is NOT thread-safe.
  */
 class ServerTaskImpl : public ServerTask {
   public:
     explicit ServerTaskImpl(SocketImpl* socket,
-                            Proto::Message::Header const* requestHeader,
+                            Proto::RequestHeader const* requestHeader,
                             Homa::unique_ptr<Homa::InMessage> request);
     virtual ~ServerTaskImpl();
     virtual Homa::InMessage* getRequest();
@@ -68,8 +70,11 @@ class ServerTaskImpl : public ServerTask {
     /// Identifier the RooPC that triggered this ServerTask.
     Proto::RooId const rooId;
 
-    /// Identifier for request that triggered this ServerTask.
-    Proto::RequestId const requestId;
+    /// Identifier for the request branch to which this ServerTask belongs.
+    Proto::BranchId const branchId;
+
+    /// Identifier for this task.
+    Proto::TaskId const taskId;
 
     /// Identify whether the request can directly from a RooPC client.
     bool const isInitialRequest;
@@ -82,15 +87,18 @@ class ServerTaskImpl : public ServerTask {
     /// be sent back to this address.
     Homa::Driver::Address const replyAddress;
 
-    /// Message containing the result of processing the operation.  This value
-    /// will be nullptr if reply() is not called.
-    Homa::unique_ptr<Homa::OutMessage> response;
+    /// Number of responses sent by this task.
+    uint64_t responseCount;
 
-    /// Delegated requests that have been sent for this RooPC.
-    std::deque<Homa::unique_ptr<Homa::OutMessage>> pendingRequests;
+    /// Number of delegated requests sent by this task.
+    uint64_t requestCount;
 
-    /// Proto::Delegation that can be sent back to the client.
-    Homa::unique_ptr<Homa::OutMessage> delegationUpdate;
+    /// Messages (include responses, delegated requests, and manifest messages),
+    //. that have been sent by this task.
+    std::deque<Homa::unique_ptr<Homa::OutMessage>> outboundMessages;
+
+    /// Messages that have been sent by this task but have not yet completed.
+    std::deque<Homa::OutMessage*> pendingMessages;
 };
 
 }  // namespace Roo

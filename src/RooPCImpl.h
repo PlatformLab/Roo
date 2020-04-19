@@ -43,10 +43,10 @@ class RooPCImpl : public RooPC {
     virtual Status checkStatus();
     virtual void wait();
 
-    void handleResponse(Proto::Message::Header* header,
+    void handleResponse(Proto::ResponseHeader* header,
                         Homa::unique_ptr<Homa::InMessage> message);
-    void handleDelegation(Proto::Delegation::Header* header,
-                          Homa::unique_ptr<Homa::InMessage> message);
+    void handleManifest(Proto::Manifest* manifest,
+                        Homa::unique_ptr<Homa::InMessage> message);
 
     /**
      * Return this RooPC's identifier.
@@ -69,30 +69,35 @@ class RooPCImpl : public RooPC {
     /// Unique identifier for this RooPC.
     Proto::RooId rooId;
 
+    /// Number of requests sent.
+    uint64_t requestCount;
+
     /// Requests that have been sent for this RooPC.
     std::deque<Homa::unique_ptr<Homa::OutMessage> > pendingRequests;
 
     /// Responses for this RooPC that have not yet been delievered.
     std::deque<Homa::unique_ptr<Homa::InMessage> > responseQueue;
 
+    /// Tracks the tasks spawned from RooPC. Maps from the identifer of the
+    /// request branch that spawned the task to a boolean value. The value is
+    /// false, if a manifest for the task has not yet been received; otherwise,
+    /// the value is true.
+    std::unordered_map<Proto::BranchId, bool, Proto::BranchId::Hasher> tasks;
+
+    /// The number of expected branch manifests that have not yet been
+    /// received. (Tracked seperately so the _tasks_ structure doesn't need to
+    /// be scanned).
+    int manifestsOutstanding;
+
+    /// Tracks whether or not expected responses have been received.  Maps from
+    /// a response identifer to a boolean value.  The value is true, if the
+    /// response has been received and false if the response is expected but
+    /// has not yet been received.
+    std::unordered_map<Proto::ResponseId, bool, Proto::ResponseId::Hasher>
+        expectedResponses;
+
     /// The number of expected responses that have not yet been received.
     int responsesOutstanding;
-
-    /**
-     * Tracking status for incoming responses.
-     */
-    enum class ResponseStatus {
-        Expected,    ///< Response is expected but not yet received.
-        Unexpected,  ///< Response has been received but the delegation
-                     ///< confirmation for this response has not yet arrived.
-        Complete,    ///< Both the response and the delegation confirmation has
-                     ///< been received.
-    };
-
-    /// Keeps track of the response this RooPC expects to receive.
-    std::unordered_map<Proto::RequestId, ResponseStatus,
-                       Proto::RequestId::Hasher>
-        expectedResponses;
 };
 
 }  // namespace Roo

@@ -40,12 +40,12 @@ using unique_ptr = std::unique_ptr<T, typename T::Deleter>;
  * sent and received asynchronously.
  *
  * An RPC is the simplest example of a RooPC where the client sends only one
- * request and expects only one response.  Unlike with RPCs, servers that handle
- * RooPC requests can delegate tasks to other servers that can response on its
+ * request and expects only one response. Unlike with RPCs, servers that handle
+ * RooPC requests can delegate tasks to other servers that can respond on its
  * behalf. A server may also choose to handle a single request by delegating
- * more than one tasks. Each requested task will result in zero or one responses
- * back to the client that initiated the RooPC.  A client may also choose it
- * send more than one request in a single RooPC.
+ * more than one tasks. Each requested task can result in any number of response
+ * messages back to the client that initiated the RooPC. A client may also
+ * choose it send more than one request in a single RooPC.
  *
  * This class is NOT thread-safe.
  */

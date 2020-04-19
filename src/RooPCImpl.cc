@@ -26,10 +26,13 @@ namespace Roo {
 RooPCImpl::RooPCImpl(SocketImpl* socket, Proto::RooId rooId)
     : socket(socket)
     , rooId(rooId)
+    , requestCount(0)
     , pendingRequests()
     , responseQueue()
-    , responsesOutstanding(0)
+    , tasks()
+    , manifestsOutstanding(0)
     , expectedResponses()
+    , responsesOutstanding(0)
 {}
 
 /**
@@ -44,7 +47,7 @@ Homa::unique_ptr<Homa::OutMessage>
 RooPCImpl::allocRequest()
 {
     Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
-    message->reserve(sizeof(Proto::Message::Header));
+    message->reserve(sizeof(Proto::RequestHeader));
     return message;
 }
 
@@ -58,14 +61,17 @@ RooPCImpl::send(Homa::Driver::Address destination,
     SpinLock::Lock lock(mutex);
     Homa::Driver::Address replyAddress =
         socket->transport->getDriver()->getLocalAddress();
-    Proto::RequestId requestId = socket->allocRequestId();
-    Proto::Message::Header outboundHeader(rooId, requestId,
-                                          Proto::Message::Type::Initial);
+    Proto::BranchId branchId(rooId, requestCount);
+    requestCount += 1;
+    Proto::RequestHeader outboundHeader(rooId, branchId);
     socket->transport->getDriver()->addressToWireFormat(
         replyAddress, &outboundHeader.replyAddress);
     request->prepend(&outboundHeader, sizeof(outboundHeader));
-    expectedResponses.insert({requestId, ResponseStatus::Expected});
-    responsesOutstanding++;
+
+    // Track spawned tasks
+    tasks.insert({branchId, false});
+    manifestsOutstanding++;
+
     request->send(destination);
     pendingRequests.push_back(std::move(request));
 }
@@ -94,7 +100,7 @@ RooPCImpl::checkStatus()
     SpinLock::Lock lock(mutex);
     if (pendingRequests.empty()) {
         return Status::NOT_STARTED;
-    } else if (responsesOutstanding == 0) {
+    } else if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
         return Status::COMPLETED;
     }
 
@@ -140,21 +146,27 @@ RooPCImpl::destroy()
  *      The incoming response message to add.
  */
 void
-RooPCImpl::handleResponse(Proto::Message::Header* header,
+RooPCImpl::handleResponse(Proto::ResponseHeader* header,
                           Homa::unique_ptr<Homa::InMessage> message)
 {
     SpinLock::Lock lock(mutex);
     message->acknowledge();
-    message->strip(sizeof(Proto::Message::Header));
-    auto ret = expectedResponses.insert(
-        {header->requestId, ResponseStatus::Unexpected});
+    message->strip(sizeof(Proto::ResponseHeader));
+
+    // Process the incoming response message.
+    auto ret = expectedResponses.insert({header->responseId, true});
     if (ret.second) {
         // New unanticipated response received.
-        responsesOutstanding++;
+        // Make sure a new task is tracked if it isn't already.
+        auto checkTask = tasks.insert({header->branchId, false});
+        if (checkTask.second) {
+            // Task not previously tracked.
+            manifestsOutstanding++;
+        }
         responseQueue.push_back(std::move(message));
-    } else if (ret.first->second == ResponseStatus::Expected) {
+    } else if (ret.first->second == false) {
         // Expected response received.
-        ret.first->second = ResponseStatus::Complete;
+        ret.first->second = true;
         responsesOutstanding--;
         responseQueue.push_back(std::move(message));
     } else {
@@ -164,47 +176,55 @@ RooPCImpl::handleResponse(Proto::Message::Header* header,
     }
 }
 
+/**
+ * Process an incoming Manifest message.
+ *
+ * @param manifest
+ *      Parsed contents of the Manifest message.
+ * @param message
+ *      The incoming message containing the Manifest.
+ */
 void
-RooPCImpl::handleDelegation(Proto::Delegation::Header* header,
-                            Homa::unique_ptr<Homa::InMessage> message)
+RooPCImpl::handleManifest(Proto::Manifest* manifest,
+                          Homa::unique_ptr<Homa::InMessage> message)
 {
     SpinLock::Lock lock(mutex);
-    auto ret = expectedResponses.insert(
-        {header->requestId, ResponseStatus::Unexpected});
-    if (ret.second) {
-        // New delegation received.
-        responsesOutstanding++;
-    } else if (ret.first->second == ResponseStatus::Expected) {
-        ret.first->second = ResponseStatus::Complete;
-        responsesOutstanding--;
-    } else {
-        WARNING(
-            "Duplicate delegation confirmation received for RooPC (%lu, %lu)",
-            rooId.socketId, rooId.sequence);
-        return;
-    }
 
-    // Add new expected requests
-    message->strip(sizeof(Proto::Delegation::Header));
-    for (uint64_t i = 0; i < header->num; ++i) {
-        Proto::RequestId requestId;
-        message->get(sizeof(requestId) * i, &requestId, sizeof(requestId));
-        auto ret =
-            expectedResponses.insert({requestId, ResponseStatus::Expected});
-        if (ret.second) {
-            // Response not yet received.
-            responsesOutstanding++;
-        } else if (ret.first->second == ResponseStatus::Unexpected) {
-            // Response already arrived.
-            ret.first->second = ResponseStatus::Complete;
-            responsesOutstanding--;
-        } else {
-            WARNING(
-                "Duplicate delegation confirmation received for RooPC (%lu, "
-                "%lu)",
-                rooId.socketId, rooId.sequence);
+    // Add tracked task branches.
+    for (uint64_t i = 0; i < manifest->requestCount; ++i) {
+        Proto::BranchId branchId(manifest->taskId, i);
+        auto checkTask = tasks.insert({branchId, false});
+        if (checkTask.second) {
+            // Task not previously tracked.
+            manifestsOutstanding++;
         }
     }
+
+    // Add expected responses.
+    for (uint64_t i = 0; i < manifest->responseCount; ++i) {
+        Proto::ResponseId responseId(manifest->taskId, i);
+        auto checkResponse = expectedResponses.insert({responseId, false});
+        if (checkResponse.second) {
+            // Response not yet tracked.
+            responsesOutstanding++;
+        }
+    }
+
+    // Mark manifest received.
+    auto checkTask = tasks.insert({manifest->branchId, true});
+    if (checkTask.second) {
+        // Task not previously tracked.
+        // Nothing to do;
+    } else if (checkTask.first->second == false) {
+        // Task previously tracked.
+        checkTask.first->second = true;
+        manifestsOutstanding--;
+    } else {
+        // Manifest previously received.
+        WARNING("Duplicate Manifest received for RooPC (%lu, %lu)",
+                rooId.socketId, rooId.sequence);
+    }
+
     message->acknowledge();
 }
 
