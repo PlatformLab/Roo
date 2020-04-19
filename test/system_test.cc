@@ -119,7 +119,8 @@ serverMain(Node* server, std::vector<std::string> addresses)
                               << " hops:" << header.hops << ")" << std::endl;
                 }
             } else {
-                for (int i = 0; i < 2; ++i) {
+                int fanout = header.fanout;
+                for (int i = 0; i < fanout; ++i) {
                     Homa::unique_ptr<Homa::OutMessage> request =
                         task->allocOutMessage();
                     request->append(&header, sizeof(MessageHeader));
