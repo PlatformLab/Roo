@@ -12,3 +12,32 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
+
+#include <Roo/Roo.h>
+#include <gtest/gtest.h>
+
+#include "Mock/MockHoma.h"
+
+namespace Roo {
+namespace {
+
+using ::testing::Return;
+
+class RooTest : public ::testing::Test {
+  public:
+    RooTest()
+        : transport()
+    {}
+    ~RooTest() {}
+
+    Mock::Homa::MockTransport transport;
+};
+
+TEST_F(RooTest, Socket_create)
+{
+    EXPECT_CALL(transport, getId()).WillOnce(Return(42));
+    std::unique_ptr<Roo::Socket> socket = Roo::Socket::create(&transport);
+}
+
+}  // namespace
+}  // namespace Roo
