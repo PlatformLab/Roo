@@ -97,7 +97,7 @@ include(FetchContent)
 FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
-    GIT_TAG        c1845f65f31c8f2bd97f622cbb92d73d4684890c
+    GIT_TAG        release-1.10.0
 )
 FetchContent_GetProperties(googletest)
 if(NOT googletest_POPULATED)
@@ -116,6 +116,7 @@ add_executable(unit_test
     src/RooTest.cc
     src/RooPCImplTest.cc
     src/ServerTaskImplTest.cc
+    src/SocketImplTest.cc
     src/SpinLockTest.cc
     src/StringUtilTest.cc
     src/ThreadIdTest.cc
