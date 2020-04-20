@@ -114,6 +114,7 @@ enable_testing()
 add_executable(unit_test
     src/DebugTest.cc
     src/RooTest.cc
+    src/RooPCImplTest.cc
     src/ServerTaskImplTest.cc
     src/SpinLockTest.cc
     src/StringUtilTest.cc
