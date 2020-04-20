@@ -45,7 +45,6 @@ class SocketImpl : public Socket {
     virtual Roo::unique_ptr<ServerTask> receive();
     virtual void poll();
 
-    Proto::TaskId allocTaskId();
     void dropRooPC(RooPCImpl* rpc);
     void remandTask(ServerTaskImpl* task);
 
@@ -53,6 +52,8 @@ class SocketImpl : public Socket {
     Homa::Transport* const transport;
 
   private:
+    Proto::TaskId allocTaskId();
+
     /// Identifer for this socket.  This identifer must be unique among all
     /// sockets that might communicate.
     uint64_t const socketId;

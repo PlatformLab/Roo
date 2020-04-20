@@ -25,13 +25,15 @@ namespace Roo {
  *
  * @param socket
  *      Socket managing this ServerTask.
+ * @param taskId
+ *      Unique identifer assigned to this task.
  * @param requestHeader
  *      Contents of the request header.  This constructor does not take
  *      ownership of this pointer.
  * @param request
  *      The request message associated with this ServerTask.
  */
-ServerTaskImpl::ServerTaskImpl(SocketImpl* socket,
+ServerTaskImpl::ServerTaskImpl(SocketImpl* socket, Proto::TaskId taskId,
                                Proto::RequestHeader const* requestHeader,
                                Homa::unique_ptr<Homa::InMessage> request)
     : state(State::IN_PROGRESS)
@@ -39,7 +41,7 @@ ServerTaskImpl::ServerTaskImpl(SocketImpl* socket,
     , socket(socket)
     , rooId(requestHeader->rooId)
     , branchId(requestHeader->branchId)
-    , taskId(socket->allocTaskId())
+    , taskId(taskId)
     , isInitialRequest(branchId.taskId == rooId)
     , request(std::move(request))
     , replyAddress(socket->transport->getDriver()->getAddress(

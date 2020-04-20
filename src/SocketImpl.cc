@@ -86,8 +86,8 @@ SocketImpl::poll()
             // Incoming message is a request.
             Proto::RequestHeader header;
             message->get(0, &header, sizeof(header));
-            ServerTaskImpl* task =
-                new ServerTaskImpl(this, &header, std::move(message));
+            ServerTaskImpl* task = new ServerTaskImpl(
+                this, allocTaskId(), &header, std::move(message));
             pendingTasks.push_back(task);
         } else if (common.opcode == Proto::Opcode::Response) {
             // Incoming message is a response
@@ -135,16 +135,6 @@ SocketImpl::poll()
 }
 
 /**
- * Return a new unique TaskId.
- */
-Proto::TaskId
-SocketImpl::allocTaskId()
-{
-    return Proto::TaskId(
-        socketId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
-}
-
-/**
  * Discard a previously allocated RooPC.
  */
 void
@@ -164,6 +154,16 @@ SocketImpl::remandTask(ServerTaskImpl* task)
 {
     SpinLock::Lock lock_socket(mutex);
     detachedTasks.push_back(task);
+}
+
+/**
+ * Return a new unique TaskId.
+ */
+Proto::TaskId
+SocketImpl::allocTaskId()
+{
+    return Proto::TaskId(
+        socketId, nextSequenceNumber.fetch_add(1, std::memory_order_relaxed));
 }
 
 }  // namespace Roo

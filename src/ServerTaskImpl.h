@@ -35,7 +35,7 @@ class SocketImpl;
  */
 class ServerTaskImpl : public ServerTask {
   public:
-    explicit ServerTaskImpl(SocketImpl* socket,
+    explicit ServerTaskImpl(SocketImpl* socket, Proto::TaskId taskId,
                             Proto::RequestHeader const* requestHeader,
                             Homa::unique_ptr<Homa::InMessage> request);
     virtual ~ServerTaskImpl();

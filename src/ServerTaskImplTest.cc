@@ -68,7 +68,8 @@ class ServerTaskImplTest : public ::testing::Test {
         header.rooId = Proto::RooId(1, 1);
         header.branchId = Proto::BranchId(Proto::RooId(2, 2), 3);
         Homa::unique_ptr<Homa::InMessage> request(&inMessage);
-        task = new ServerTaskImpl(socket, &header, std::move(request));
+        task = new ServerTaskImpl(socket, Proto::TaskId(42, 1), &header,
+                                  std::move(request));
     }
 
     Mock::Homa::MockTransport transport;
@@ -94,7 +95,8 @@ TEST_F(ServerTaskImplTest, constructor)
         .WillOnce(Return(0xDEADBEEF));
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::RequestHeader))));
 
-    ServerTaskImpl task(socket, &header, std::move(request));
+    ServerTaskImpl task(socket, Proto::TaskId(42, 1), &header,
+                        std::move(request));
     EXPECT_EQ(socket, task.socket);
     EXPECT_EQ(header.rooId, task.rooId);
     EXPECT_EQ(header.branchId, task.branchId);
