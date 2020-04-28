@@ -44,6 +44,10 @@ class SocketImpl : public Socket {
     virtual Roo::unique_ptr<RooPC> allocRooPC();
     virtual Roo::unique_ptr<ServerTask> receive();
     virtual void poll();
+    virtual Homa::Driver* getDriver()
+    {
+        return transport->getDriver();
+    }
 
     void dropRooPC(RooPCImpl* rpc);
     void remandTask(ServerTaskImpl* task);

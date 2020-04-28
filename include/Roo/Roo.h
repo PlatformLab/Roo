@@ -225,6 +225,11 @@ class Socket {
      * be called frequently to ensure timely progress.
      */
     virtual void poll() = 0;
+
+    /**
+     * Return the driver used to send and received packets for this Socket.
+     */
+    virtual Homa::Driver* getDriver() = 0;
 };
 
 }  // namespace Roo
