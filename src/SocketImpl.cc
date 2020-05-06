@@ -15,7 +15,10 @@
 
 #include "SocketImpl.h"
 
+#include <PerfUtils/Cycles.h>
+
 #include "Debug.h"
+#include "Perf.h"
 #include "RooPCImpl.h"
 #include "ServerTaskImpl.h"
 
@@ -77,9 +80,12 @@ void
 SocketImpl::poll()
 {
     transport->poll();
+    bool idle = true;
+    uint64_t start_tsc = PerfUtils::Cycles::rdtsc();
     // Process incoming messages
     for (Homa::unique_ptr<Homa::InMessage> message = transport->receive();
          message; message = std::move(transport->receive())) {
+        idle = false;
         Proto::HeaderCommon common;
         message->get(0, &common, sizeof(common));
         if (common.opcode == Proto::Opcode::Request) {
@@ -116,6 +122,14 @@ SocketImpl::poll()
             WARNING("Unexpected protocol message received.");
         }
     }
+
+    // Track cycles spent processing incoming messages.
+    uint64_t elapsed_cycles = PerfUtils::Cycles::rdtsc() - start_tsc;
+    if (!idle) {
+        Perf::threadCounters.active_cycles.fetch_add(elapsed_cycles,
+                                                     std::memory_order_relaxed);
+    }
+
     // Check detached ServerTasks
     {
         SpinLock::Lock lock_socket(mutex);
