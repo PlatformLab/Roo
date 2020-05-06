@@ -50,16 +50,6 @@ class ServerTaskImpl : public ServerTask {
     virtual void destroy();
 
   private:
-    enum class State {
-        IN_PROGRESS,  // Request received but response has not yet been sent.
-        DROPPED,      // The request was dropped.
-        COMPLETED,    // The server's response has been sent/acknowledged.
-        FAILED,       // The response failed to be sent/processed.
-    };
-
-    /// Current state of the ServerTask.
-    std::atomic<State> state;
-
     /// True if the ServerTask is no longer held by the application and is being
     /// processed by the Socket.
     std::atomic<bool> detached;

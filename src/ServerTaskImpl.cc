@@ -36,8 +36,7 @@ namespace Roo {
 ServerTaskImpl::ServerTaskImpl(SocketImpl* socket, Proto::TaskId taskId,
                                Proto::RequestHeader const* requestHeader,
                                Homa::unique_ptr<Homa::InMessage> request)
-    : state(State::IN_PROGRESS)
-    , detached(false)
+    : detached(false)
     , socket(socket)
     , rooId(requestHeader->rooId)
     , branchId(requestHeader->branchId)
