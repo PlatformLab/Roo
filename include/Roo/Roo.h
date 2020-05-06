@@ -145,7 +145,7 @@ class ServerTask {
      * @return
      *      Pointer to the incoming request message.  Ownership of the message
      *      is not transferred to the caller; the message's lifetime is tied to
-     *      this RequestContext.
+     *      this ServerTask.
      */
     virtual Homa::InMessage* getRequest() = 0;
 
@@ -154,9 +154,9 @@ class ServerTask {
      * additional request message.
      *
      * @return
-     *      Pointer to an OutMessage object associated with this RequestContext;
-     *      the message should only be used with this RequestContext.  Ownership
-     *      is transferred to the caller.
+     *      Pointer to an OutMessage object associated with this ServerTask; the
+     *      message should only be used with this ServerTask. Ownership is
+     *      transferred to the caller.
      */
     virtual Homa::unique_ptr<Homa::OutMessage> allocOutMessage() = 0;
 
