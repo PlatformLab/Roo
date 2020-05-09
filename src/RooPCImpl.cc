@@ -16,6 +16,7 @@
 #include "RooPCImpl.h"
 
 #include "Debug.h"
+#include "Perf.h"
 #include "SocketImpl.h"
 
 namespace Roo {
@@ -72,6 +73,7 @@ RooPCImpl::send(Homa::Driver::Address destination,
     tasks.insert({branchId, false});
     manifestsOutstanding++;
 
+    Perf::counters.tx_message_bytes.add(request->length());
     request->send(destination);
     pendingRequests.push_back(std::move(request));
 }

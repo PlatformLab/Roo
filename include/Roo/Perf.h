@@ -35,6 +35,12 @@ struct Stats {
     /// CPU time actively processing RooPC and ServerTask messages in cycles.
     uint64_t active_cycles;
 
+    /// Number of application message bytes sent.
+    uint64_t tx_message_bytes;
+
+    /// Number of application message bytes received.
+    uint64_t rx_message_bytes;
+
     /// Number of bytes sent by the transport.
     uint64_t transport_tx_bytes;
 
