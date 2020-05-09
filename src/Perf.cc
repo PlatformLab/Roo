@@ -44,7 +44,7 @@ std::unordered_set<const Counters*> perThreadCounters;
 }  // namespace Internal
 
 // Init thread local thread counters
-thread_local ThreadCounters threadCounters;
+thread_local ThreadCounters counters;
 
 /**
  * Construct and register a new per thread set of counters.
@@ -61,7 +61,7 @@ ThreadCounters::ThreadCounters()
 ThreadCounters::~ThreadCounters()
 {
     std::lock_guard<std::mutex> lock(Internal::mutex);
-    Internal::globalCounters.active_cycles += this->active_cycles;
+    Internal::globalCounters.add(this);
     Internal::perThreadCounters.erase(this);
 }
 
@@ -74,11 +74,12 @@ getStats(Stats* stats)
     stats->timestamp = PerfUtils::Cycles::rdtsc();
     stats->cycles_per_second = PerfUtils::Cycles::perSecond();
 
-    stats->active_cycles = Internal::globalCounters.active_cycles;
-
+    Counters output;
+    output.add(&Internal::globalCounters);
     for (const Counters* counters : Internal::perThreadCounters) {
-        stats->active_cycles += counters->active_cycles;
+        output.add(counters);
     }
+    output.dumpStats(stats);
 
     // Include Homa stats
     Homa::Perf::Stats homa_stats;
