@@ -85,8 +85,24 @@ getStats(Stats* stats)
     Homa::Perf::getStats(&homa_stats);
 
     stats->active_cycles += homa_stats.active_cycles;
-    stats->transport_tx_bytes += homa_stats.tx_bytes;
-    stats->transport_rx_bytes += homa_stats.rx_bytes;
+    stats->transport_tx_bytes = homa_stats.tx_bytes;
+    stats->transport_rx_bytes = homa_stats.rx_bytes;
+    stats->tx_data_pkts = homa_stats.tx_data_pkts;
+    stats->rx_data_pkts = homa_stats.rx_data_pkts;
+    stats->tx_grant_pkts = homa_stats.tx_grant_pkts;
+    stats->rx_grant_pkts = homa_stats.rx_grant_pkts;
+    stats->tx_done_pkts = homa_stats.tx_done_pkts;
+    stats->rx_done_pkts = homa_stats.rx_done_pkts;
+    stats->tx_resend_pkts = homa_stats.tx_resend_pkts;
+    stats->rx_resend_pkts = homa_stats.rx_resend_pkts;
+    stats->tx_busy_pkts = homa_stats.tx_busy_pkts;
+    stats->rx_busy_pkts = homa_stats.rx_busy_pkts;
+    stats->tx_ping_pkts = homa_stats.tx_ping_pkts;
+    stats->rx_ping_pkts = homa_stats.rx_ping_pkts;
+    stats->tx_unknown_pkts = homa_stats.tx_unknown_pkts;
+    stats->rx_unknown_pkts = homa_stats.rx_unknown_pkts;
+    stats->tx_error_pkts = homa_stats.tx_error_pkts;
+    stats->rx_error_pkts = homa_stats.rx_error_pkts;
 }
 
 }  // namespace Perf
