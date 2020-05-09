@@ -85,6 +85,8 @@ getStats(Stats* stats)
     Homa::Perf::getStats(&homa_stats);
 
     stats->active_cycles += homa_stats.active_cycles;
+    stats->transport_tx_bytes += homa_stats.tx_bytes;
+    stats->transport_rx_bytes += homa_stats.rx_bytes;
 }
 
 }  // namespace Perf
