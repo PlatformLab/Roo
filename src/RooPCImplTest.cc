@@ -147,6 +147,7 @@ TEST_F(RooPCImplTest, checkStatus)
 
     rpc->pendingRequests.push_back(
         std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
+    rpc->requestCount = 1;
     EXPECT_EQ(RooPC::Status::COMPLETED, rpc->checkStatus());
 
     rpc->manifestsOutstanding = 1;
@@ -180,6 +181,8 @@ TEST_F(RooPCImplTest, handleResponse_unexpected)
     header.branchId = branchId;
     header.responseId = responseId;
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+    rpc->pendingRequests.push_back(
+        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
     EXPECT_CALL(inMessage, acknowledge());
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
 
@@ -194,7 +197,9 @@ TEST_F(RooPCImplTest, handleResponse_unexpected)
     EXPECT_EQ(1, rpc->tasks.count(branchId));
     EXPECT_FALSE(rpc->tasks.at(branchId));
     EXPECT_EQ(1, rpc->manifestsOutstanding);
+    EXPECT_FALSE(rpc->pendingRequests.empty());
 
+    EXPECT_CALL(outMessage, release());
     EXPECT_CALL(inMessage, release());
 }
 
@@ -204,8 +209,11 @@ TEST_F(RooPCImplTest, handleResponse_expected)
     Proto::ResponseHeader header;
     header.responseId = responseId;
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+    rpc->pendingRequests.push_back(
+        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
     EXPECT_CALL(inMessage, acknowledge());
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
+    EXPECT_CALL(outMessage, release());
 
     rpc->expectedResponses[responseId] = false;
     rpc->responsesOutstanding = 1;
@@ -216,6 +224,7 @@ TEST_F(RooPCImplTest, handleResponse_expected)
     EXPECT_TRUE(rpc->expectedResponses.at(responseId));
     EXPECT_EQ(0, rpc->responsesOutstanding);
     EXPECT_EQ(1, rpc->responseQueue.size());
+    EXPECT_TRUE(rpc->pendingRequests.empty());
 
     EXPECT_CALL(inMessage, release());
 }
@@ -266,6 +275,9 @@ TEST_F(RooPCImplTest, handleManifest_basic)
     rpc->tasks[Proto::BranchId(taskId, 0)] = true;
     rpc->expectedResponses[Proto::ResponseId(taskId, 0)] = true;
 
+    rpc->pendingRequests.push_back(
+        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
+
     EXPECT_EQ(1, rpc->tasks.size());
     EXPECT_EQ(1, rpc->expectedResponses.size());
 
@@ -285,6 +297,10 @@ TEST_F(RooPCImplTest, handleManifest_basic)
     EXPECT_EQ(2, rpc->expectedResponses.size());
     EXPECT_TRUE(rpc->expectedResponses.at(Proto::ResponseId(taskId, 0)));
     EXPECT_FALSE(rpc->expectedResponses.at(Proto::ResponseId(taskId, 1)));
+
+    EXPECT_FALSE(rpc->pendingRequests.empty());
+
+    EXPECT_CALL(outMessage, release());
 }
 
 TEST_F(RooPCImplTest, handleManifest_tracked)
@@ -297,13 +313,19 @@ TEST_F(RooPCImplTest, handleManifest_tracked)
     rpc->tasks[branchId] = false;
     rpc->manifestsOutstanding = 1;
 
+    rpc->pendingRequests.push_back(
+        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
+
     EXPECT_CALL(inMessage, acknowledge());
     EXPECT_CALL(inMessage, release());
+    EXPECT_CALL(outMessage, release());
 
     rpc->handleManifest(&manifest, std::move(message));
 
     EXPECT_EQ(0, rpc->manifestsOutstanding);
     EXPECT_TRUE(rpc->tasks.at(branchId));
+
+    EXPECT_TRUE(rpc->pendingRequests.empty());
 }
 
 TEST_F(RooPCImplTest, handleManifest_duplicate)

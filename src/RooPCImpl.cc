@@ -100,7 +100,7 @@ RooPC::Status
 RooPCImpl::checkStatus()
 {
     SpinLock::Lock lock(mutex);
-    if (pendingRequests.empty()) {
+    if (requestCount == 0) {
         return Status::NOT_STARTED;
     } else if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
         return Status::COMPLETED;
@@ -176,6 +176,10 @@ RooPCImpl::handleResponse(Proto::ResponseHeader* header,
         NOTICE("Duplicate response received for RooPC (%lu, %lu)",
                rooId.socketId, rooId.sequence);
     }
+    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
+        // RooPC is complete
+        pendingRequests.clear();
+    }
 }
 
 /**
@@ -228,6 +232,11 @@ RooPCImpl::handleManifest(Proto::Manifest* manifest,
     }
 
     message->acknowledge();
+
+    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
+        // RooPC is complete
+        pendingRequests.clear();
+    }
 }
 
 }  // namespace Roo
