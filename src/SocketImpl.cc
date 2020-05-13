@@ -95,6 +95,7 @@ SocketImpl::poll()
             Perf::counters.rx_message_bytes.add(message->length());
             ServerTaskImpl* task = new ServerTaskImpl(
                 this, allocTaskId(), &header, std::move(message));
+            SpinLock::Lock lock_socket(mutex);
             pendingTasks.push_back(task);
         } else if (common.opcode == Proto::Opcode::Response) {
             // Incoming message is a response
