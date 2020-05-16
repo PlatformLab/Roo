@@ -78,10 +78,10 @@ class ServerTaskImpl : public ServerTask {
     Homa::Driver::Address const replyAddress;
 
     /// Number of responses sent by this task.
-    uint64_t responseCount;
+    uint32_t responseCount;
 
     /// Number of delegated requests sent by this task.
-    uint64_t requestCount;
+    uint32_t requestCount;
 
     /// Messages (include responses, delegated requests, and manifest messages),
     //. that have been sent by this task.
