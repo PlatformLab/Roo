@@ -60,6 +60,7 @@ RooPCImpl::send(Homa::Driver::Address destination,
                 Homa::unique_ptr<Homa::OutMessage> request)
 {
     SpinLock::Lock lock(mutex);
+    Perf::counters.tx_message_bytes.add(request->length());
     Homa::Driver::Address replyAddress =
         socket->transport->getDriver()->getLocalAddress();
     Proto::BranchId branchId(rooId, requestCount);
@@ -73,7 +74,6 @@ RooPCImpl::send(Homa::Driver::Address destination,
     tasks.insert({branchId, false});
     manifestsOutstanding++;
 
-    Perf::counters.tx_message_bytes.add(request->length());
     request->send(destination);
     pendingRequests.push_back(std::move(request));
 }

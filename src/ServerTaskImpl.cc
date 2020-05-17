@@ -94,11 +94,11 @@ ServerTaskImpl::allocOutMessage()
 void
 ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
 {
+    Perf::counters.tx_message_bytes.add(message->length());
     Proto::ResponseHeader header(rooId, branchId,
                                  Proto::ResponseId(taskId, responseCount));
     responseCount += 1;
     message->prepend(&header, sizeof(header));
-    Perf::counters.tx_message_bytes.add(message->length());
     message->send(replyAddress);
     pendingMessages.push_back(message.get());
     outboundMessages.push_back(std::move(message));
@@ -111,13 +111,13 @@ void
 ServerTaskImpl::delegate(Homa::Driver::Address destination,
                          Homa::unique_ptr<Homa::OutMessage> message)
 {
+    Perf::counters.tx_message_bytes.add(message->length());
     Proto::BranchId newBranchId(taskId, requestCount);
     requestCount += 1;
     Proto::RequestHeader header(rooId, newBranchId);
     socket->transport->getDriver()->addressToWireFormat(replyAddress,
                                                         &header.replyAddress);
     message->prepend(&header, sizeof(header));
-    Perf::counters.tx_message_bytes.add(message->length());
     message->send(destination);
     pendingMessages.push_back(message.get());
     outboundMessages.push_back(std::move(message));

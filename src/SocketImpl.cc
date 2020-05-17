@@ -92,7 +92,8 @@ SocketImpl::poll()
             // Incoming message is a request.
             Proto::RequestHeader header;
             message->get(0, &header, sizeof(header));
-            Perf::counters.rx_message_bytes.add(message->length());
+            Perf::counters.rx_message_bytes.add(message->length() -
+                                                sizeof(header));
             ServerTaskImpl* task = new ServerTaskImpl(
                 this, allocTaskId(), &header, std::move(message));
             SpinLock::Lock lock_socket(mutex);
@@ -101,7 +102,8 @@ SocketImpl::poll()
             // Incoming message is a response
             Proto::ResponseHeader header;
             message->get(0, &header, sizeof(header));
-            Perf::counters.rx_message_bytes.add(message->length());
+            Perf::counters.rx_message_bytes.add(message->length() -
+                                                sizeof(header));
             SpinLock::Lock lock_socket(mutex);
             auto it = rpcs.find(header.rooId);
             if (it != rpcs.end()) {
