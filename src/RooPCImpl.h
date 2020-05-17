@@ -60,6 +60,8 @@ class RooPCImpl : public RooPC {
     virtual void destroy();
 
   private:
+    void markManifestReceived(Proto::BranchId branchId);
+
     /// Monitor-style lock
     SpinLock mutex;
 

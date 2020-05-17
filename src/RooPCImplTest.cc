@@ -261,7 +261,7 @@ TEST_F(RooPCImplTest, handleResponse_duplicate)
     EXPECT_EQ(0, rpc->responseQueue.size());
 }
 
-TEST_F(RooPCImplTest, handleManifest_basic)
+TEST_F(RooPCImplTest, handleManifest)
 {
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
     Proto::TaskId taskId(2, 2);
@@ -303,56 +303,53 @@ TEST_F(RooPCImplTest, handleManifest_basic)
     EXPECT_CALL(outMessage, release());
 }
 
-TEST_F(RooPCImplTest, handleManifest_tracked)
+TEST_F(RooPCImplTest, markManifestReceived_new)
 {
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
-    Proto::Manifest manifest;
-    manifest.branchId = branchId;
-    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
 
-    rpc->tasks[branchId] = false;
-    rpc->manifestsOutstanding = 1;
+    EXPECT_EQ(0, rpc->tasks.size());
 
-    rpc->pendingRequests.push_back(
-        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
+    rpc->markManifestReceived(branchId);
 
-    EXPECT_CALL(inMessage, acknowledge());
-    EXPECT_CALL(inMessage, release());
-    EXPECT_CALL(outMessage, release());
-
-    rpc->handleManifest(&manifest, std::move(message));
-
-    EXPECT_EQ(0, rpc->manifestsOutstanding);
+    EXPECT_EQ(1, rpc->tasks.size());
     EXPECT_TRUE(rpc->tasks.at(branchId));
-
-    EXPECT_TRUE(rpc->pendingRequests.empty());
 }
 
-TEST_F(RooPCImplTest, handleManifest_duplicate)
+TEST_F(RooPCImplTest, markManifestReceived_tracked)
 {
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
-    Proto::Manifest manifest;
-    manifest.branchId = branchId;
-    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+    rpc->tasks[branchId] = false;
+    rpc->manifestsOutstanding = 1;
+    EXPECT_EQ(1, rpc->tasks.size());
 
+    rpc->markManifestReceived(branchId);
+
+    EXPECT_EQ(1, rpc->tasks.size());
+    EXPECT_TRUE(rpc->tasks.at(branchId));
+    EXPECT_EQ(0, rpc->manifestsOutstanding);
+}
+
+TEST_F(RooPCImplTest, markManifestReceived_duplicate)
+{
+    Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
     rpc->tasks[branchId] = true;
-
-    EXPECT_CALL(inMessage, acknowledge());
-    EXPECT_CALL(inMessage, release());
 
     VectorHandler handler;
     Debug::setLogHandler(std::ref(handler));
 
-    rpc->handleManifest(&manifest, std::move(message));
+    rpc->markManifestReceived(branchId);
 
     EXPECT_EQ(1U, handler.messages.size());
     const Debug::DebugMessage& m = handler.messages.at(0);
     EXPECT_STREQ("src/RooPCImpl.cc", m.filename);
-    EXPECT_STREQ("handleManifest", m.function);
+    EXPECT_STREQ("markManifestReceived", m.function);
     EXPECT_EQ(int(Debug::LogLevel::WARNING), m.logLevel);
-    EXPECT_EQ("Duplicate Manifest received for RooPC (42, 1)", m.message);
+    EXPECT_EQ("Duplicate Manifest for RooPC (42, 1)", m.message);
     Debug::setLogHandler(std::function<void(Debug::DebugMessage)>());
-}
 
+    EXPECT_EQ(1, rpc->tasks.size());
+    EXPECT_TRUE(rpc->tasks.at(branchId));
+    EXPECT_EQ(0, rpc->manifestsOutstanding);
+}
 }  // namespace
 }  // namespace Roo

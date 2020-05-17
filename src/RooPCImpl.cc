@@ -65,7 +65,7 @@ RooPCImpl::send(Homa::Driver::Address destination,
         socket->transport->getDriver()->getLocalAddress();
     Proto::BranchId branchId(rooId, requestCount);
     requestCount += 1;
-    Proto::RequestHeader outboundHeader(rooId, branchId);
+    Proto::RequestHeader outboundHeader(rooId, branchId, true);
     socket->transport->getDriver()->addressToWireFormat(
         replyAddress, &outboundHeader.replyAddress);
     request->prepend(&outboundHeader, sizeof(outboundHeader));
@@ -155,6 +155,12 @@ RooPCImpl::handleResponse(Proto::ResponseHeader* header,
     message->acknowledge();
     message->strip(sizeof(Proto::ResponseHeader));
 
+    // Process an implied manifiest if available.
+    if (header->manifestImplied) {
+        // Mark manifest received.
+        markManifestReceived(header->branchId);
+    }
+
     // Process the incoming response message.
     auto ret = expectedResponses.insert({header->responseId, true});
     if (ret.second) {
@@ -217,7 +223,27 @@ RooPCImpl::handleManifest(Proto::Manifest* manifest,
     }
 
     // Mark manifest received.
-    auto checkTask = tasks.insert({manifest->branchId, true});
+    markManifestReceived(manifest->branchId);
+
+    message->acknowledge();
+
+    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
+        // RooPC is complete
+        pendingRequests.clear();
+    }
+}
+
+/**
+ * Helper method that performs the necessary book-keeping to mark a request's
+ * manifest as received.
+ *
+ * @param branchId
+ *      Identifies the request associated with the received manifest.
+ */
+void
+RooPCImpl::markManifestReceived(Proto::BranchId branchId)
+{
+    auto checkTask = tasks.insert({branchId, true});
     if (checkTask.second) {
         // Task not previously tracked.
         // Nothing to do;
@@ -227,15 +253,8 @@ RooPCImpl::handleManifest(Proto::Manifest* manifest,
         manifestsOutstanding--;
     } else {
         // Manifest previously received.
-        WARNING("Duplicate Manifest received for RooPC (%lu, %lu)",
-                rooId.socketId, rooId.sequence);
-    }
-
-    message->acknowledge();
-
-    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
-        // RooPC is complete
-        pendingRequests.clear();
+        WARNING("Duplicate Manifest for RooPC (%lu, %lu)", rooId.socketId,
+                rooId.sequence);
     }
 }
 

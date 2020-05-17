@@ -131,9 +131,15 @@ TEST_F(ServerTaskImplTest, allocOutMessage)
     EXPECT_CALL(outMessage, release());
 }
 
-TEST_F(ServerTaskImplTest, reply)
+TEST_F(ServerTaskImplTest, reply_basic)
 {
     initDefaultTask();
+
+    Mock::Homa::MockOutMessage deferredRequest;
+    task->deferredMessage.reset(&deferredRequest);
+    task->deferredMessageAddress = 0xFEED;
+    task->requestCount = 1;
+    task->deferredMessageIsRequest = true;
 
     Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
 
@@ -141,6 +147,11 @@ TEST_F(ServerTaskImplTest, reply)
     EXPECT_TRUE(task->pendingMessages.empty());
     EXPECT_TRUE(task->outboundMessages.empty());
 
+    EXPECT_CALL(deferredRequest, length());
+    EXPECT_CALL(deferredRequest, prepend(_, _));
+    EXPECT_CALL(deferredRequest, send(Eq(0xFEED)));
+
+    EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage,
                 prepend(An<const void*>(), Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(outMessage, send(Eq(replyAddress)));
@@ -148,15 +159,52 @@ TEST_F(ServerTaskImplTest, reply)
     task->reply(std::move(message));
 
     EXPECT_EQ(1, task->responseCount);
-    EXPECT_FALSE(task->pendingMessages.empty());
-    EXPECT_FALSE(task->outboundMessages.empty());
+    EXPECT_EQ(2, task->pendingMessages.size());
+    EXPECT_EQ(2, task->outboundMessages.size());
+
+    EXPECT_CALL(deferredRequest, release());
+    EXPECT_CALL(outMessage, release());
+    task->pendingMessages.clear();
+    task->outboundMessages.clear();
+}
+
+TEST_F(ServerTaskImplTest, reply_deferred)
+{
+    initDefaultTask();
+
+    Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
+
+    EXPECT_EQ(0, task->requestCount);
+    EXPECT_EQ(0, task->responseCount);
+    EXPECT_TRUE(task->pendingMessages.empty());
+    EXPECT_TRUE(task->outboundMessages.empty());
+    EXPECT_FALSE(task->deferredMessage);
+
+    task->reply(std::move(message));
+
+    EXPECT_FALSE(task->deferredMessageIsRequest);
+    EXPECT_EQ(task->rooId, task->deferredResponseHeader.rooId);
+    EXPECT_EQ(task->branchId, task->deferredResponseHeader.branchId);
+    EXPECT_EQ(Proto::ResponseId(task->taskId, 0),
+              task->deferredResponseHeader.responseId);
+    EXPECT_EQ(1, task->responseCount);
+    EXPECT_EQ(replyAddress, task->deferredMessageAddress);
+    EXPECT_EQ(&outMessage, task->deferredMessage.get());
+    EXPECT_TRUE(task->pendingMessages.empty());
+    EXPECT_TRUE(task->outboundMessages.empty());
 
     EXPECT_CALL(outMessage, release());
 }
 
-TEST_F(ServerTaskImplTest, delegate)
+TEST_F(ServerTaskImplTest, delegate_basic)
 {
     initDefaultTask();
+
+    Mock::Homa::MockOutMessage deferredResponse;
+    task->deferredMessage.reset(&deferredResponse);
+    task->deferredMessageAddress = replyAddress;
+    task->responseCount = 1;
+    task->deferredMessageIsRequest = false;
 
     Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
 
@@ -164,10 +212,15 @@ TEST_F(ServerTaskImplTest, delegate)
     EXPECT_TRUE(task->pendingMessages.empty());
     EXPECT_TRUE(task->outboundMessages.empty());
 
+    EXPECT_CALL(deferredResponse, length());
+    EXPECT_CALL(deferredResponse, prepend(_, _));
+    EXPECT_CALL(deferredResponse, send(Eq(replyAddress)));
+
     EXPECT_CALL(transport, getDriver());
     EXPECT_CALL(driver,
                 addressToWireFormat(Eq(replyAddress),
                                     An<Homa::Driver::WireFormatAddress*>()));
+    EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage,
                 prepend(An<const void*>(), Eq(sizeof(Proto::RequestHeader))));
     EXPECT_CALL(outMessage, send(Eq(0xFEED)));
@@ -175,8 +228,43 @@ TEST_F(ServerTaskImplTest, delegate)
     task->delegate(0xFEED, std::move(message));
 
     EXPECT_EQ(1, task->requestCount);
-    EXPECT_FALSE(task->pendingMessages.empty());
-    EXPECT_FALSE(task->outboundMessages.empty());
+    EXPECT_EQ(2, task->pendingMessages.size());
+    EXPECT_EQ(2, task->outboundMessages.size());
+
+    EXPECT_CALL(deferredResponse, release());
+    EXPECT_CALL(outMessage, release());
+    task->pendingMessages.clear();
+    task->outboundMessages.clear();
+}
+
+TEST_F(ServerTaskImplTest, delegate_deferred)
+{
+    initDefaultTask();
+
+    Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
+
+    EXPECT_EQ(0, task->requestCount);
+    EXPECT_EQ(0, task->responseCount);
+    EXPECT_TRUE(task->pendingMessages.empty());
+    EXPECT_TRUE(task->outboundMessages.empty());
+    EXPECT_FALSE(task->deferredMessage);
+
+    EXPECT_CALL(transport, getDriver());
+    EXPECT_CALL(driver,
+                addressToWireFormat(Eq(replyAddress),
+                                    An<Homa::Driver::WireFormatAddress*>()));
+
+    task->delegate(0xFEED, std::move(message));
+
+    EXPECT_TRUE(task->deferredMessageIsRequest);
+    EXPECT_EQ(1, task->requestCount);
+    EXPECT_EQ(task->rooId, task->deferredRequestHeader.rooId);
+    EXPECT_EQ(Proto::BranchId(task->taskId, 0),
+              task->deferredRequestHeader.branchId);
+    EXPECT_EQ(0xFEED, task->deferredMessageAddress);
+    EXPECT_EQ(&outMessage, task->deferredMessage.get());
+    EXPECT_TRUE(task->pendingMessages.empty());
+    EXPECT_TRUE(task->outboundMessages.empty());
 
     EXPECT_CALL(outMessage, release());
 }
@@ -223,7 +311,7 @@ TEST_F(ServerTaskImplTest, poll_failed)
     EXPECT_FALSE(task->poll());
 }
 
-TEST_F(ServerTaskImplTest, destroy)
+TEST_F(ServerTaskImplTest, destroy_basic)
 {
     initDefaultTask();
 
@@ -242,6 +330,122 @@ TEST_F(ServerTaskImplTest, destroy)
     EXPECT_FALSE(task->pendingMessages.empty());
     EXPECT_FALSE(task->outboundMessages.empty());
     EXPECT_TRUE(task->detached);
+
+    EXPECT_CALL(outMessage, release());
+}
+
+TEST_F(ServerTaskImplTest, destroy_deferredRequest)
+{
+    initDefaultTask();
+
+    Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
+
+    task->deferredMessage = std::move(message);
+    task->deferredMessageIsRequest = true;
+    task->deferredMessageAddress = 0xFEED;
+    task->requestCount = 1;
+
+    EXPECT_TRUE(task->pendingMessages.empty());
+    EXPECT_TRUE(task->outboundMessages.empty());
+    EXPECT_FALSE(task->detached);
+
+    EXPECT_CALL(outMessage, length());
+    EXPECT_CALL(outMessage, prepend(Eq(&task->deferredRequestHeader),
+                                    Eq(sizeof(Proto::RequestHeader))));
+    EXPECT_CALL(outMessage, send(Eq(0xFEED)));
+
+    task->destroy();
+
+    EXPECT_EQ(task->branchId, task->deferredRequestHeader.branchId);
+    EXPECT_EQ(&outMessage, task->pendingMessages.back());
+    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
+    EXPECT_TRUE(task->detached);
+
+    EXPECT_CALL(outMessage, release());
+}
+
+TEST_F(ServerTaskImplTest, destroy_deferredResponse)
+{
+    initDefaultTask();
+
+    Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
+
+    task->deferredMessage = std::move(message);
+    task->deferredMessageIsRequest = false;
+    task->deferredMessageAddress = replyAddress;
+    task->responseCount = 1;
+
+    EXPECT_TRUE(task->pendingMessages.empty());
+    EXPECT_TRUE(task->outboundMessages.empty());
+    EXPECT_FALSE(task->detached);
+
+    EXPECT_CALL(outMessage, length());
+    EXPECT_CALL(outMessage, prepend(Eq(&task->deferredResponseHeader),
+                                    Eq(sizeof(Proto::ResponseHeader))));
+    EXPECT_CALL(outMessage, send(Eq(replyAddress)));
+
+    task->destroy();
+
+    EXPECT_TRUE(task->deferredResponseHeader.manifestImplied);
+    EXPECT_EQ(&outMessage, task->pendingMessages.back());
+    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
+    EXPECT_TRUE(task->detached);
+
+    EXPECT_CALL(outMessage, release());
+}
+
+TEST_F(ServerTaskImplTest, sendDeferredMessage_request)
+{
+    initDefaultTask();
+
+    Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
+
+    task->deferredMessage = std::move(message);
+    task->deferredMessageIsRequest = true;
+    task->deferredMessageAddress = 0xFEED;
+
+    EXPECT_EQ(0, task->requestCount);
+    EXPECT_EQ(0, task->responseCount);
+    EXPECT_TRUE(task->pendingMessages.empty());
+    EXPECT_TRUE(task->outboundMessages.empty());
+
+    EXPECT_CALL(outMessage, length());
+    EXPECT_CALL(outMessage, prepend(Eq(&task->deferredRequestHeader),
+                                    Eq(sizeof(Proto::RequestHeader))));
+    EXPECT_CALL(outMessage, send(Eq(0xFEED)));
+
+    task->sendDeferredMessage();
+
+    EXPECT_EQ(&outMessage, task->pendingMessages.back());
+    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
+
+    EXPECT_CALL(outMessage, release());
+}
+
+TEST_F(ServerTaskImplTest, sendDeferredMessage_response)
+{
+    initDefaultTask();
+
+    Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
+
+    task->deferredMessage = std::move(message);
+    task->deferredMessageIsRequest = false;
+    task->deferredMessageAddress = replyAddress;
+
+    EXPECT_EQ(0, task->requestCount);
+    EXPECT_EQ(0, task->responseCount);
+    EXPECT_TRUE(task->pendingMessages.empty());
+    EXPECT_TRUE(task->outboundMessages.empty());
+
+    EXPECT_CALL(outMessage, length());
+    EXPECT_CALL(outMessage, prepend(Eq(&task->deferredResponseHeader),
+                                    Eq(sizeof(Proto::ResponseHeader))));
+    EXPECT_CALL(outMessage, send(Eq(replyAddress)));
+
+    task->sendDeferredMessage();
+
+    EXPECT_EQ(&outMessage, task->pendingMessages.back());
+    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
 
     EXPECT_CALL(outMessage, release());
 }

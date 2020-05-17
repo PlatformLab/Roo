@@ -42,7 +42,7 @@ ServerTaskImpl::ServerTaskImpl(SocketImpl* socket, Proto::TaskId taskId,
     , rooId(requestHeader->rooId)
     , branchId(requestHeader->branchId)
     , taskId(taskId)
-    , isInitialRequest(branchId.taskId == rooId)
+    , isInitialRequest(requestHeader->isFromClient)
     , request(std::move(request))
     , replyAddress(socket->transport->getDriver()->getAddress(
           &requestHeader->replyAddress))
@@ -50,6 +50,11 @@ ServerTaskImpl::ServerTaskImpl(SocketImpl* socket, Proto::TaskId taskId,
     , requestCount(0)
     , outboundMessages()
     , pendingMessages()
+    , deferredMessageIsRequest(false)
+    , deferredMessageAddress()
+    , deferredRequestHeader()
+    , deferredResponseHeader()
+    , deferredMessage()
 {
     this->request->strip(sizeof(Proto::RequestHeader));
 }
@@ -94,14 +99,29 @@ ServerTaskImpl::allocOutMessage()
 void
 ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
 {
-    Perf::counters.tx_message_bytes.add(message->length());
-    Proto::ResponseHeader header(rooId, branchId,
-                                 Proto::ResponseId(taskId, responseCount));
-    responseCount += 1;
-    message->prepend(&header, sizeof(header));
-    message->send(replyAddress);
-    pendingMessages.push_back(message.get());
-    outboundMessages.push_back(std::move(message));
+    if (requestCount + responseCount > 0) {
+        if (requestCount + responseCount == 1) {
+            // Send out any deferred message
+            sendDeferredMessage();
+        }
+        Perf::counters.tx_message_bytes.add(message->length());
+        Proto::ResponseHeader header(rooId, branchId,
+                                     Proto::ResponseId(taskId, responseCount));
+        responseCount += 1;
+        message->prepend(&header, sizeof(header));
+        message->send(replyAddress);
+        pendingMessages.push_back(message.get());
+        outboundMessages.push_back(std::move(message));
+    } else {
+        // This is the first OutMessage; defer sending in case the Manifest
+        // message can be elided.
+        deferredMessageIsRequest = false;
+        new (&deferredResponseHeader) Proto::ResponseHeader(
+            rooId, branchId, Proto::ResponseId(taskId, responseCount));
+        responseCount += 1;
+        deferredMessageAddress = replyAddress;
+        deferredMessage = std::move(message);
+    }
 }
 
 /**
@@ -111,16 +131,33 @@ void
 ServerTaskImpl::delegate(Homa::Driver::Address destination,
                          Homa::unique_ptr<Homa::OutMessage> message)
 {
-    Perf::counters.tx_message_bytes.add(message->length());
-    Proto::BranchId newBranchId(taskId, requestCount);
-    requestCount += 1;
-    Proto::RequestHeader header(rooId, newBranchId);
-    socket->transport->getDriver()->addressToWireFormat(replyAddress,
-                                                        &header.replyAddress);
-    message->prepend(&header, sizeof(header));
-    message->send(destination);
-    pendingMessages.push_back(message.get());
-    outboundMessages.push_back(std::move(message));
+    if (requestCount + responseCount > 0) {
+        if (requestCount + responseCount == 1) {
+            // Send out any deferred message
+            sendDeferredMessage();
+        }
+        Perf::counters.tx_message_bytes.add(message->length());
+        Proto::BranchId newBranchId(taskId, requestCount);
+        requestCount += 1;
+        Proto::RequestHeader header(rooId, newBranchId);
+        socket->transport->getDriver()->addressToWireFormat(
+            replyAddress, &header.replyAddress);
+        message->prepend(&header, sizeof(header));
+        message->send(destination);
+        pendingMessages.push_back(message.get());
+        outboundMessages.push_back(std::move(message));
+    } else {
+        // This is the first OutMessage; defer sending in case the Manifest
+        // message can be elided.
+        deferredMessageIsRequest = true;
+        Proto::BranchId newBranchId(taskId, requestCount);
+        requestCount += 1;
+        new (&deferredRequestHeader) Proto::RequestHeader(rooId, newBranchId);
+        socket->transport->getDriver()->addressToWireFormat(
+            replyAddress, &deferredRequestHeader.replyAddress);
+        deferredMessageAddress = destination;
+        deferredMessage = std::move(message);
+    }
 }
 
 /**
@@ -168,19 +205,52 @@ ServerTaskImpl::poll()
 void
 ServerTaskImpl::destroy()
 {
-    // Send out the manifest information
-    Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
-    Proto::Manifest manifest(rooId, branchId, taskId, requestCount,
-                             responseCount);
-    message->append(&manifest, sizeof(Proto::Manifest));
-    message->send(replyAddress);
-    pendingMessages.push_back(message.get());
-    outboundMessages.push_back(std::move(message));
+    if (responseCount + requestCount != 1) {
+        // Send out the manifest information
+        Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
+        Proto::Manifest manifest(rooId, branchId, taskId, requestCount,
+                                 responseCount);
+        message->append(&manifest, sizeof(Proto::Manifest));
+        message->send(replyAddress);
+        pendingMessages.push_back(message.get());
+        outboundMessages.push_back(std::move(message));
+    } else {
+        // Send deferred message with Manifest optimization
+        assert(deferredMessage);
+        if (deferredMessageIsRequest) {
+            deferredRequestHeader.branchId = branchId;
+            assert(deferredRequestHeader.branchId == branchId);
+        } else {
+            deferredResponseHeader.manifestImplied = true;
+        }
+        sendDeferredMessage();
+    }
 
     // Don't delete the ServerTask yet.  Just pass it to the socket so it can
     // make sure that any outgoing messages are competely sent.
     detached.store(true);
     socket->remandTask(this);
+}
+
+/**
+ * Send the buffered message.
+ */
+void
+ServerTaskImpl::sendDeferredMessage()
+{
+    if (deferredMessage) {
+        Perf::counters.tx_message_bytes.add(deferredMessage->length());
+        if (deferredMessageIsRequest) {
+            deferredMessage->prepend(&deferredRequestHeader,
+                                     sizeof(deferredRequestHeader));
+        } else {
+            deferredMessage->prepend(&deferredResponseHeader,
+                                     sizeof(deferredResponseHeader));
+        }
+        deferredMessage->send(deferredMessageAddress);
+        pendingMessages.push_back(deferredMessage.get());
+        outboundMessages.push_back(std::move(deferredMessage));
+    }
 }
 
 }  // namespace Roo

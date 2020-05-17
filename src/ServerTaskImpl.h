@@ -50,6 +50,8 @@ class ServerTaskImpl : public ServerTask {
     virtual void destroy();
 
   private:
+    void sendDeferredMessage();
+
     /// True if the ServerTask is no longer held by the application and is being
     /// processed by the Socket.
     std::atomic<bool> detached;
@@ -89,6 +91,22 @@ class ServerTaskImpl : public ServerTask {
 
     /// Messages that have been sent by this task but have not yet completed.
     std::deque<Homa::OutMessage*> pendingMessages;
+
+    /// True if the deferred message is a request. False if the deferred message
+    /// is a response.
+    bool deferredMessageIsRequest;
+
+    /// Address to which the deferred message should be sent.
+    Homa::Driver::Address deferredMessageAddress;
+
+    /// Header for the deferred message if the message is a request.
+    Proto::RequestHeader deferredRequestHeader;
+
+    /// Header for the deferred message if the message is a response.
+    Proto::ResponseHeader deferredResponseHeader;
+
+    /// A request or response message that has been buffered to be sent later.
+    Homa::unique_ptr<Homa::OutMessage> deferredMessage;
 };
 
 }  // namespace Roo

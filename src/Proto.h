@@ -246,6 +246,8 @@ struct RequestHeader {
     HeaderCommon common;  ///< Common header information.
     RooId rooId;          ///< Id of the RooPC to which this request belongs.
     BranchId branchId;    ///< Branch id of this request.
+    bool isFromClient;    ///< True if the request was sent directly from a
+                          ///< RooPC client. False, otherwise.
     Homa::Driver::WireFormatAddress replyAddress;  ///< Replies to this request
                                                    ///< should be sent to this
                                                    ///< address.
@@ -257,14 +259,17 @@ struct RequestHeader {
         : common(Opcode::Request)
         , rooId()
         , branchId()
+        , isFromClient()
         , replyAddress()
     {}
 
     /// RequestHeader constructor.
-    explicit RequestHeader(RooId rooId, BranchId branchId)
+    explicit RequestHeader(RooId rooId, BranchId branchId,
+                           bool isFromClient = false)
         : common(Opcode::Request)
         , rooId(rooId)
         , branchId(branchId)
+        , isFromClient(isFromClient)
         , replyAddress()
     {}
 } __attribute__((packed));
@@ -278,6 +283,8 @@ struct ResponseHeader {
     RooId rooId;            ///< Id of the RooPC to which this request belongs.
     BranchId branchId;      ///< Branch for which this message is a response.
     ResponseId responseId;  ///< Id of this response.
+    bool manifestImplied;   ///< True if this response should be considered a
+                            ///< Manifest message as well. False, otherwise.
 
     /// ResponseHeader default constructor.
     ResponseHeader()
@@ -285,15 +292,17 @@ struct ResponseHeader {
         , rooId()
         , branchId()
         , responseId()
+        , manifestImplied()
     {}
 
     /// ResponseHeader constructor.
     explicit ResponseHeader(RooId rooId, BranchId branchId,
-                            ResponseId responseId)
+                            ResponseId responseId, bool manifestImplied = false)
         : common(Opcode::Response)
         , rooId(rooId)
         , branchId(branchId)
         , responseId(responseId)
+        , manifestImplied(manifestImplied)
     {}
 } __attribute__((packed));
 
