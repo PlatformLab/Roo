@@ -86,6 +86,7 @@ getStats(Stats* stats)
     Homa::Perf::getStats(&homa_stats);
 
     stats->active_cycles += homa_stats.active_cycles;
+    stats->idle_cycles += homa_stats.idle_cycles;
     stats->transport_tx_bytes = homa_stats.tx_bytes;
     stats->transport_rx_bytes = homa_stats.rx_bytes;
     stats->tx_data_pkts = homa_stats.tx_data_pkts;

@@ -128,12 +128,6 @@ SocketImpl::poll()
         }
     }
 
-    // Track cycles spent processing incoming messages.
-    uint64_t elapsed_cycles = PerfUtils::Cycles::rdtsc() - start_tsc;
-    if (!idle) {
-        Perf::counters.active_cycles.add(elapsed_cycles);
-    }
-
     // Check detached ServerTasks
     {
         SpinLock::Lock lock_socket(mutex);
@@ -147,8 +141,17 @@ SocketImpl::poll()
                 // ServerTask is done polling
                 it = detachedTasks.erase(it);
                 delete task;
+                idle = false;
             }
         }
+    }
+
+    // Track cycles spent processing
+    uint64_t elapsed_cycles = PerfUtils::Cycles::rdtsc() - start_tsc;
+    if (!idle) {
+        Perf::counters.active_cycles.add(elapsed_cycles);
+    } else {
+        Perf::counters.idle_cycles.add(elapsed_cycles);
     }
 }
 

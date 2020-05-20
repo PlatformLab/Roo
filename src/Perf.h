@@ -71,6 +71,7 @@ struct Counters {
      */
     Counters()
         : active_cycles(0)
+        , idle_cycles(0)
         , tx_message_bytes(0)
         , rx_message_bytes(0)
     {}
@@ -86,6 +87,7 @@ struct Counters {
     void add(const Counters* other)
     {
         active_cycles.add(other->active_cycles);
+        idle_cycles.add(other->idle_cycles);
         tx_message_bytes.add(other->tx_message_bytes);
         rx_message_bytes.add(other->rx_message_bytes);
     }
@@ -96,12 +98,16 @@ struct Counters {
     void dumpStats(Stats* stats)
     {
         stats->active_cycles = active_cycles.get();
+        stats->idle_cycles = idle_cycles.get();
         stats->tx_message_bytes = tx_message_bytes.get();
         stats->rx_message_bytes = rx_message_bytes.get();
     }
 
     /// CPU time actively processing RooPCs and ServerTask messages in cycles.
     Stat<uint64_t> active_cycles;
+
+    /// CPU time running Roo with no work to do in cycles.
+    Stat<uint64_t> idle_cycles;
 
     /// Number of application message bytes sent.
     Stat<uint64_t> tx_message_bytes;

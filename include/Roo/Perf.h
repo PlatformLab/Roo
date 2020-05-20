@@ -35,6 +35,9 @@ struct Stats {
     /// CPU time actively processing RooPC and ServerTask messages in cycles.
     uint64_t active_cycles;
 
+    /// CPU time running Roo with no work to do in cycles.
+    uint64_t idle_cycles;
+
     /// Number of application message bytes sent.
     uint64_t tx_message_bytes;
 
