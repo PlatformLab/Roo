@@ -107,6 +107,7 @@ TEST_F(RooPCImplTest, send)
     EXPECT_EQ(0U, rpc->manifestsOutstanding);
     EXPECT_TRUE(rpc->pendingRequests.empty());
 
+    EXPECT_CALL(outMessage, length());
     EXPECT_CALL(transport, getDriver()).Times(2);
     EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(replyAddress));
     EXPECT_CALL(driver,

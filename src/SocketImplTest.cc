@@ -148,6 +148,7 @@ TEST_F(SocketImplTest, poll_request)
         .WillOnce(
             Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
                              std::placeholders::_3, &header)));
+    EXPECT_CALL(inMessage, length());
     // ServerTaskImpl construction expected calls
     EXPECT_CALL(transport, getDriver());
     EXPECT_CALL(driver,
@@ -182,6 +183,7 @@ TEST_F(SocketImplTest, poll_response)
         .WillOnce(
             Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
                              std::placeholders::_3, &header)));
+    EXPECT_CALL(inMessage, length());
     // RooPCImpl::handleResponse() expected calls
     EXPECT_CALL(inMessage, acknowledge());
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
@@ -212,6 +214,7 @@ TEST_F(SocketImplTest, poll_response_stale)
         .WillOnce(
             Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
                              std::placeholders::_3, &header)));
+    EXPECT_CALL(inMessage, length());
     EXPECT_CALL(inMessage, release());
 
     socket->poll();
@@ -343,7 +346,6 @@ TEST_F(SocketImplTest, poll_detached_tasks)
     socket->poll();
 
     EXPECT_EQ(0, socket->detachedTasks.size());
-
 }
 
 TEST_F(SocketImplTest, dropRooPC)
