@@ -115,7 +115,7 @@ TEST_F(RooPCImplTest, send)
                                     An<Homa::Driver::WireFormatAddress*>()));
     EXPECT_CALL(outMessage,
                 prepend(An<const void*>(), Eq(sizeof(Proto::RequestHeader))));
-    EXPECT_CALL(outMessage, send(Eq(0xFEED)));
+    EXPECT_CALL(outMessage, send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
 
     rpc->send(0xFEED, std::move(message));
 

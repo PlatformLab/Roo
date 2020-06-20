@@ -74,7 +74,7 @@ RooPCImpl::send(Homa::Driver::Address destination,
     tasks.insert({branchId, false});
     manifestsOutstanding++;
 
-    request->send(destination);
+    request->send(destination, Homa::OutMessage::NO_RETRY);
     pendingRequests.push_back(std::move(request));
 }
 

@@ -149,12 +149,14 @@ TEST_F(ServerTaskImplTest, reply_basic)
 
     EXPECT_CALL(deferredRequest, length());
     EXPECT_CALL(deferredRequest, prepend(_, _));
-    EXPECT_CALL(deferredRequest, send(Eq(0xFEED)));
+    EXPECT_CALL(deferredRequest,
+                send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
 
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage,
                 prepend(An<const void*>(), Eq(sizeof(Proto::ResponseHeader))));
-    EXPECT_CALL(outMessage, send(Eq(replyAddress)));
+    EXPECT_CALL(outMessage,
+                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY)));
 
     task->reply(std::move(message));
 
@@ -214,7 +216,8 @@ TEST_F(ServerTaskImplTest, delegate_basic)
 
     EXPECT_CALL(deferredResponse, length());
     EXPECT_CALL(deferredResponse, prepend(_, _));
-    EXPECT_CALL(deferredResponse, send(Eq(replyAddress)));
+    EXPECT_CALL(deferredResponse,
+                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY)));
 
     EXPECT_CALL(transport, getDriver());
     EXPECT_CALL(driver,
@@ -223,7 +226,7 @@ TEST_F(ServerTaskImplTest, delegate_basic)
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage,
                 prepend(An<const void*>(), Eq(sizeof(Proto::RequestHeader))));
-    EXPECT_CALL(outMessage, send(Eq(0xFEED)));
+    EXPECT_CALL(outMessage, send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
 
     task->delegate(0xFEED, std::move(message));
 
@@ -323,7 +326,8 @@ TEST_F(ServerTaskImplTest, destroy_basic)
         .WillOnce(
             Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
     EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::Manifest))));
-    EXPECT_CALL(outMessage, send(Eq(replyAddress)));
+    EXPECT_CALL(outMessage,
+                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY)));
 
     task->destroy();
 
@@ -352,7 +356,7 @@ TEST_F(ServerTaskImplTest, destroy_deferredRequest)
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage, prepend(Eq(&task->deferredRequestHeader),
                                     Eq(sizeof(Proto::RequestHeader))));
-    EXPECT_CALL(outMessage, send(Eq(0xFEED)));
+    EXPECT_CALL(outMessage, send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
 
     task->destroy();
 
@@ -382,7 +386,8 @@ TEST_F(ServerTaskImplTest, destroy_deferredResponse)
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage, prepend(Eq(&task->deferredResponseHeader),
                                     Eq(sizeof(Proto::ResponseHeader))));
-    EXPECT_CALL(outMessage, send(Eq(replyAddress)));
+    EXPECT_CALL(outMessage,
+                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY)));
 
     task->destroy();
 
@@ -412,7 +417,7 @@ TEST_F(ServerTaskImplTest, sendDeferredMessage_request)
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage, prepend(Eq(&task->deferredRequestHeader),
                                     Eq(sizeof(Proto::RequestHeader))));
-    EXPECT_CALL(outMessage, send(Eq(0xFEED)));
+    EXPECT_CALL(outMessage, send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
 
     task->sendDeferredMessage();
 
@@ -440,7 +445,8 @@ TEST_F(ServerTaskImplTest, sendDeferredMessage_response)
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage, prepend(Eq(&task->deferredResponseHeader),
                                     Eq(sizeof(Proto::ResponseHeader))));
-    EXPECT_CALL(outMessage, send(Eq(replyAddress)));
+    EXPECT_CALL(outMessage,
+                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY)));
 
     task->sendDeferredMessage();
 

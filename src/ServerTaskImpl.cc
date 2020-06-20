@@ -109,7 +109,7 @@ ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
                                      Proto::ResponseId(taskId, responseCount));
         responseCount += 1;
         message->prepend(&header, sizeof(header));
-        message->send(replyAddress);
+        message->send(replyAddress, Homa::OutMessage::NO_RETRY);
         pendingMessages.push_back(message.get());
         outboundMessages.push_back(std::move(message));
     } else {
@@ -143,7 +143,7 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination,
         socket->transport->getDriver()->addressToWireFormat(
             replyAddress, &header.replyAddress);
         message->prepend(&header, sizeof(header));
-        message->send(destination);
+        message->send(destination, Homa::OutMessage::NO_RETRY);
         pendingMessages.push_back(message.get());
         outboundMessages.push_back(std::move(message));
     } else {
@@ -211,7 +211,7 @@ ServerTaskImpl::destroy()
         Proto::Manifest manifest(rooId, branchId, taskId, requestCount,
                                  responseCount);
         message->append(&manifest, sizeof(Proto::Manifest));
-        message->send(replyAddress);
+        message->send(replyAddress, Homa::OutMessage::NO_RETRY);
         pendingMessages.push_back(message.get());
         outboundMessages.push_back(std::move(message));
     } else {
@@ -247,7 +247,8 @@ ServerTaskImpl::sendDeferredMessage()
             deferredMessage->prepend(&deferredResponseHeader,
                                      sizeof(deferredResponseHeader));
         }
-        deferredMessage->send(deferredMessageAddress);
+        deferredMessage->send(deferredMessageAddress,
+                              Homa::OutMessage::NO_RETRY);
         pendingMessages.push_back(deferredMessage.get());
         outboundMessages.push_back(std::move(deferredMessage));
     }

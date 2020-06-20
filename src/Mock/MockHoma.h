@@ -88,7 +88,8 @@ class MockOutMessage : public ::Homa::OutMessage {
     MOCK_CONST_METHOD0(length, size_t());
     MOCK_METHOD2(prepend, void(const void* source, size_t count));
     MOCK_METHOD1(reserve, void(size_t count));
-    MOCK_METHOD1(send, void(::Homa::Driver::Address destination));
+    MOCK_METHOD2(send, void(::Homa::Driver::Address destination,
+                            ::Homa::OutMessage::Options options));
 
   protected:
     MOCK_METHOD0(release, void());
