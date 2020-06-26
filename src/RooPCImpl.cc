@@ -158,7 +158,12 @@ RooPCImpl::handleResponse(Proto::ResponseHeader* header,
     // Process an implied manifiest if available.
     if (header->manifestImplied) {
         // Mark manifest received.
-        markManifestReceived(header->branchId);
+        markManifestReceived(header->branchId, lock);
+    }
+
+    // Process piggy-backed manifest if available.
+    if (header->hasManifest) {
+        processManifest(&header->manifest, lock);
     }
 
     // Process the incoming response message.
@@ -191,16 +196,75 @@ RooPCImpl::handleResponse(Proto::ResponseHeader* header,
 /**
  * Process an incoming Manifest message.
  *
- * @param manifest
+ * @param header
  *      Parsed contents of the Manifest message.
  * @param message
  *      The incoming message containing the Manifest.
  */
 void
-RooPCImpl::handleManifest(Proto::Manifest* manifest,
+RooPCImpl::handleManifest(Proto::ManifestHeader* header,
                           Homa::unique_ptr<Homa::InMessage> message)
 {
     SpinLock::Lock lock(mutex);
+    size_t offest = sizeof(Proto::ManifestHeader);
+    for (size_t i = 0; i < header->manifestCount; ++i) {
+        Proto::Manifest manifest;
+        message->get(offest + (sizeof(Proto::Manifest) * i), &manifest,
+                     sizeof(Proto::Manifest));
+        processManifest(&manifest, lock);
+    }
+    message->acknowledge();
+
+    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
+        // RooPC is complete
+        pendingRequests.clear();
+    }
+}
+
+/**
+ * Helper method that performs the necessary book-keeping to mark a request's
+ * manifest as received.
+ *
+ * @param branchId
+ *      Identifies the request associated with the received manifest.
+ * @param lock
+ *      Reminds the caller that the RooPCImpl::mutex should be held.
+ */
+void
+RooPCImpl::markManifestReceived(Proto::BranchId branchId,
+                                const SpinLock::Lock& lock)
+{
+    (void)lock;
+
+    auto checkTask = tasks.insert({branchId, true});
+    if (checkTask.second) {
+        // Task not previously tracked.
+        // Nothing to do;
+    } else if (checkTask.first->second == false) {
+        // Task previously tracked.
+        checkTask.first->second = true;
+        manifestsOutstanding--;
+    } else {
+        // Manifest previously received.
+        WARNING("Duplicate Manifest for RooPC (%lu, %lu)", rooId.socketId,
+                rooId.sequence);
+    }
+}
+
+/**
+ * Helper method that executes the Manifest related parts of a RooPC's
+ * completion tracking logic; should be call for each received Manifest.
+ *
+ * @param manifest
+ *      The received Manifest that should be processed.
+ * @param lock
+ *      Reminds the caller that the RooPCImpl::mutex should be held.
+ */
+void
+RooPCImpl::processManifest(Proto::Manifest* manifest,
+                           const SpinLock::Lock& lock)
+{
+    (void)lock;
 
     // Add tracked task branches.
     for (uint64_t i = 0; i < manifest->requestCount; ++i) {
@@ -223,39 +287,7 @@ RooPCImpl::handleManifest(Proto::Manifest* manifest,
     }
 
     // Mark manifest received.
-    markManifestReceived(manifest->branchId);
-
-    message->acknowledge();
-
-    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
-        // RooPC is complete
-        pendingRequests.clear();
-    }
-}
-
-/**
- * Helper method that performs the necessary book-keeping to mark a request's
- * manifest as received.
- *
- * @param branchId
- *      Identifies the request associated with the received manifest.
- */
-void
-RooPCImpl::markManifestReceived(Proto::BranchId branchId)
-{
-    auto checkTask = tasks.insert({branchId, true});
-    if (checkTask.second) {
-        // Task not previously tracked.
-        // Nothing to do;
-    } else if (checkTask.first->second == false) {
-        // Task previously tracked.
-        checkTask.first->second = true;
-        manifestsOutstanding--;
-    } else {
-        // Manifest previously received.
-        WARNING("Duplicate Manifest for RooPC (%lu, %lu)", rooId.socketId,
-                rooId.sequence);
-    }
+    markManifestReceived(manifest->branchId, lock);
 }
 
 }  // namespace Roo

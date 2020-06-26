@@ -50,7 +50,7 @@ class ServerTaskImpl : public ServerTask {
     virtual void destroy();
 
   private:
-    void sendDeferredMessage();
+    void sendBufferedMessage();
 
     /// True if the ServerTask is no longer held by the application and is being
     /// processed by the Socket.
@@ -92,21 +92,28 @@ class ServerTaskImpl : public ServerTask {
     /// Messages that have been sent by this task but have not yet completed.
     std::deque<Homa::OutMessage*> pendingMessages;
 
-    /// True if the deferred message is a request. False if the deferred message
+    /// True if the buffered message is a request. False if the buffered message
     /// is a response.
-    bool deferredMessageIsRequest;
+    bool bufferedMessageIsRequest;
 
-    /// Address to which the deferred message should be sent.
-    Homa::Driver::Address deferredMessageAddress;
+    /// Address to which the buffered message should be sent.
+    Homa::Driver::Address bufferedMessageAddress;
 
-    /// Header for the deferred message if the message is a request.
-    Proto::RequestHeader deferredRequestHeader;
+    /// Header for the buffered message if the message is a request.
+    Proto::RequestHeader bufferedRequestHeader;
 
-    /// Header for the deferred message if the message is a response.
-    Proto::ResponseHeader deferredResponseHeader;
+    /// Header for the buffered message if the message is a response.
+    Proto::ResponseHeader bufferedResponseHeader;
 
     /// A request or response message that has been buffered to be sent later.
-    Homa::unique_ptr<Homa::OutMessage> deferredMessage;
+    Homa::unique_ptr<Homa::OutMessage> bufferedMessage;
+
+    /// True if a manifest that was piggy-backed on the incoming request still
+    /// needs to be sent.
+    bool hasUnsentManifest;
+
+    /// Holds a manifest that was piggy-backed on the incoming request.
+    Proto::Manifest delegatedManifest;
 };
 
 }  // namespace Roo

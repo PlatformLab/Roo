@@ -227,9 +227,11 @@ TEST_F(SocketImplTest, poll_manifest)
     socket->rpcs.insert({rooId, rpc});
 
     Mock::Homa::MockInMessage inMessage;
-    Proto::Manifest header;
+    Proto::ManifestHeader header;
     header.rooId = rooId;
-    header.branchId = Proto::BranchId(Proto::TaskId(2, 2), 2);
+    header.manifestCount = 1;
+    Proto::Manifest manifest;
+    manifest.branchId = Proto::BranchId(Proto::TaskId(2, 2), 2);
     EXPECT_CALL(transport, poll);
     EXPECT_CALL(transport, receive())
         .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>(&inMessage))))
@@ -238,11 +240,16 @@ TEST_F(SocketImplTest, poll_manifest)
         .WillOnce(
             Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
                              std::placeholders::_3, &header.common)));
-    EXPECT_CALL(inMessage, get(0, _, Eq(sizeof(Proto::Manifest))))
+    EXPECT_CALL(inMessage, get(0, _, Eq(sizeof(Proto::ManifestHeader))))
         .WillOnce(
             Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
                              std::placeholders::_3, &header)));
     // RooPCImpl::handleManifest() expected calls
+    EXPECT_CALL(inMessage, get(Eq(sizeof(Proto::ManifestHeader)), _,
+                               Eq(sizeof(Proto::Manifest))))
+        .WillOnce(
+            Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
+                             std::placeholders::_3, &manifest)));
     EXPECT_CALL(inMessage, acknowledge());
     EXPECT_CALL(inMessage, release());
 
@@ -258,9 +265,11 @@ TEST_F(SocketImplTest, poll_manifest_stale)
     Proto::RooId rooId = socket->allocTaskId();
 
     Mock::Homa::MockInMessage inMessage;
-    Proto::Manifest header;
+    Proto::ManifestHeader header;
     header.rooId = rooId;
-    header.branchId = Proto::BranchId(Proto::TaskId(2, 2), 2);
+    header.manifestCount = 1;
+    Proto::Manifest manifest;
+    manifest.branchId = Proto::BranchId(Proto::TaskId(2, 2), 2);
     EXPECT_CALL(transport, poll);
     EXPECT_CALL(transport, receive())
         .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>(&inMessage))))
@@ -269,7 +278,7 @@ TEST_F(SocketImplTest, poll_manifest_stale)
         .WillOnce(
             Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
                              std::placeholders::_3, &header.common)));
-    EXPECT_CALL(inMessage, get(0, _, Eq(sizeof(Proto::Manifest))))
+    EXPECT_CALL(inMessage, get(0, _, Eq(sizeof(Proto::ManifestHeader))))
         .WillOnce(
             Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
                              std::placeholders::_3, &header)));

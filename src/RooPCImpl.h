@@ -45,7 +45,7 @@ class RooPCImpl : public RooPC {
 
     void handleResponse(Proto::ResponseHeader* header,
                         Homa::unique_ptr<Homa::InMessage> message);
-    void handleManifest(Proto::Manifest* manifest,
+    void handleManifest(Proto::ManifestHeader* header,
                         Homa::unique_ptr<Homa::InMessage> message);
 
     /**
@@ -60,7 +60,9 @@ class RooPCImpl : public RooPC {
     virtual void destroy();
 
   private:
-    void markManifestReceived(Proto::BranchId branchId);
+    void markManifestReceived(Proto::BranchId branchId,
+                              const SpinLock::Lock& lock);
+    void processManifest(Proto::Manifest* manifest, const SpinLock::Lock& lock);
 
     /// Monitor-style lock
     SpinLock mutex;

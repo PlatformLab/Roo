@@ -50,11 +50,13 @@ ServerTaskImpl::ServerTaskImpl(SocketImpl* socket, Proto::TaskId taskId,
     , requestCount(0)
     , outboundMessages()
     , pendingMessages()
-    , deferredMessageIsRequest(false)
-    , deferredMessageAddress()
-    , deferredRequestHeader()
-    , deferredResponseHeader()
-    , deferredMessage()
+    , bufferedMessageIsRequest(false)
+    , bufferedMessageAddress()
+    , bufferedRequestHeader()
+    , bufferedResponseHeader()
+    , bufferedMessage()
+    , hasUnsentManifest(requestHeader->hasManifest)
+    , delegatedManifest(requestHeader->manifest)
 {
     this->request->strip(sizeof(Proto::RequestHeader));
 }
@@ -99,29 +101,28 @@ ServerTaskImpl::allocOutMessage()
 void
 ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
 {
-    if (requestCount + responseCount > 0) {
-        if (requestCount + responseCount == 1) {
-            // Send out any deferred message
-            sendDeferredMessage();
-        }
-        Perf::counters.tx_message_bytes.add(message->length());
-        Proto::ResponseHeader header(rooId, branchId,
-                                     Proto::ResponseId(taskId, responseCount));
-        responseCount += 1;
-        message->prepend(&header, sizeof(header));
-        message->send(replyAddress, Homa::OutMessage::NO_RETRY);
-        pendingMessages.push_back(message.get());
-        outboundMessages.push_back(std::move(message));
-    } else {
-        // This is the first OutMessage; defer sending in case the Manifest
-        // message can be elided.
-        deferredMessageIsRequest = false;
-        new (&deferredResponseHeader) Proto::ResponseHeader(
-            rooId, branchId, Proto::ResponseId(taskId, responseCount));
-        responseCount += 1;
-        deferredMessageAddress = replyAddress;
-        deferredMessage = std::move(message);
+    // The ServerTask always buffers that last outbound message so that any
+    // necessary manifest information can be piggy-back on the last message.
+    // The response message provided in this call will be sent when the server
+    // next calls either reply() or delegate() or when server is done processing
+    // the ServerTask.
+
+    // Send out any previously buffered message
+    sendBufferedMessage();
+
+    // Format the response message
+    bufferedMessageIsRequest = false;
+    new (&bufferedResponseHeader) Proto::ResponseHeader(
+        rooId, branchId, Proto::ResponseId(taskId, responseCount));
+    responseCount += 1;
+    if (hasUnsentManifest) {
+        // piggy-back the delegated manifest
+        bufferedResponseHeader.hasManifest = true;
+        bufferedResponseHeader.manifest = delegatedManifest;
+        hasUnsentManifest = false;
     }
+    bufferedMessageAddress = replyAddress;
+    bufferedMessage = std::move(message);
 }
 
 /**
@@ -131,33 +132,30 @@ void
 ServerTaskImpl::delegate(Homa::Driver::Address destination,
                          Homa::unique_ptr<Homa::OutMessage> message)
 {
-    if (requestCount + responseCount > 0) {
-        if (requestCount + responseCount == 1) {
-            // Send out any deferred message
-            sendDeferredMessage();
-        }
-        Perf::counters.tx_message_bytes.add(message->length());
-        Proto::BranchId newBranchId(taskId, requestCount);
-        requestCount += 1;
-        Proto::RequestHeader header(rooId, newBranchId);
-        socket->transport->getDriver()->addressToWireFormat(
-            replyAddress, &header.replyAddress);
-        message->prepend(&header, sizeof(header));
-        message->send(destination, Homa::OutMessage::NO_RETRY);
-        pendingMessages.push_back(message.get());
-        outboundMessages.push_back(std::move(message));
-    } else {
-        // This is the first OutMessage; defer sending in case the Manifest
-        // message can be elided.
-        deferredMessageIsRequest = true;
-        Proto::BranchId newBranchId(taskId, requestCount);
-        requestCount += 1;
-        new (&deferredRequestHeader) Proto::RequestHeader(rooId, newBranchId);
-        socket->transport->getDriver()->addressToWireFormat(
-            replyAddress, &deferredRequestHeader.replyAddress);
-        deferredMessageAddress = destination;
-        deferredMessage = std::move(message);
+    // The ServerTask always buffers that last outbound message so that any
+    // necessary manifest information can be piggy-back on the last message.
+    // The request message provided in this call will be sent when the server
+    // next calls either reply() or delegate() or when server is done processing
+    // the ServerTask.
+
+    // Send out any previously buffered message
+    sendBufferedMessage();
+
+    // Format the delegated request message
+    bufferedMessageIsRequest = true;
+    Proto::BranchId newBranchId(taskId, requestCount);
+    requestCount += 1;
+    new (&bufferedRequestHeader) Proto::RequestHeader(rooId, newBranchId);
+    socket->transport->getDriver()->addressToWireFormat(
+        replyAddress, &bufferedRequestHeader.replyAddress);
+    if (hasUnsentManifest) {
+        // piggy-back the delegated manifest
+        bufferedRequestHeader.hasManifest = true;
+        bufferedRequestHeader.manifest = delegatedManifest;
+        hasUnsentManifest = false;
     }
+    bufferedMessageAddress = destination;
+    bufferedMessage = std::move(message);
 }
 
 /**
@@ -205,25 +203,46 @@ ServerTaskImpl::poll()
 void
 ServerTaskImpl::destroy()
 {
-    if (responseCount + requestCount != 1) {
-        // Send out the manifest information
+    if (responseCount + requestCount == 0) {
+        // Task didn't generate any outbound messages; send Manifest message.
         Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
-        Proto::Manifest manifest(rooId, branchId, taskId, requestCount,
-                                 responseCount);
+        Proto::ManifestHeader header(rooId, hasUnsentManifest ? 2 : 1);
+        Proto::Manifest manifest(branchId, taskId, requestCount, responseCount);
+        message->append(&header, sizeof(Proto::ManifestHeader));
+        if (hasUnsentManifest) {
+            message->append(&delegatedManifest, sizeof(Proto::Manifest));
+        }
         message->append(&manifest, sizeof(Proto::Manifest));
         message->send(replyAddress, Homa::OutMessage::NO_RETRY);
         pendingMessages.push_back(message.get());
         outboundMessages.push_back(std::move(message));
-    } else {
-        // Send deferred message with Manifest optimization
-        assert(deferredMessage);
-        if (deferredMessageIsRequest) {
-            deferredRequestHeader.branchId = branchId;
-            assert(deferredRequestHeader.branchId == branchId);
+    } else if (responseCount + requestCount == 1) {
+        // Only a single outbound message; use Manifest elimination.
+        assert(bufferedMessage);
+        if (bufferedMessageIsRequest) {
+            bufferedRequestHeader.branchId = branchId;
+            assert(bufferedRequestHeader.branchId == branchId);
         } else {
-            deferredResponseHeader.manifestImplied = true;
+            bufferedResponseHeader.manifestImplied = true;
         }
-        sendDeferredMessage();
+        sendBufferedMessage();
+    } else {
+        // More than 1 outbound message; piggy-back the manifest for this task.
+        assert(bufferedMessage);
+        assert(!hasUnsentManifest);  // Any previously delegated manifest should
+                                     // have already been forwarded.
+
+        Proto::Manifest manifest(branchId, taskId, requestCount, responseCount);
+        if (bufferedMessageIsRequest) {
+            assert(!bufferedRequestHeader.hasManifest);
+            bufferedRequestHeader.hasManifest = true;
+            bufferedRequestHeader.manifest = manifest;
+        } else {
+            assert(!bufferedResponseHeader.hasManifest);
+            bufferedResponseHeader.hasManifest = true;
+            bufferedResponseHeader.manifest = manifest;
+        }
+        sendBufferedMessage();
     }
 
     // Don't delete the ServerTask yet.  Just pass it to the socket so it can
@@ -236,21 +255,21 @@ ServerTaskImpl::destroy()
  * Send the buffered message.
  */
 void
-ServerTaskImpl::sendDeferredMessage()
+ServerTaskImpl::sendBufferedMessage()
 {
-    if (deferredMessage) {
-        Perf::counters.tx_message_bytes.add(deferredMessage->length());
-        if (deferredMessageIsRequest) {
-            deferredMessage->prepend(&deferredRequestHeader,
-                                     sizeof(deferredRequestHeader));
+    if (bufferedMessage) {
+        Perf::counters.tx_message_bytes.add(bufferedMessage->length());
+        if (bufferedMessageIsRequest) {
+            bufferedMessage->prepend(&bufferedRequestHeader,
+                                     sizeof(bufferedRequestHeader));
         } else {
-            deferredMessage->prepend(&deferredResponseHeader,
-                                     sizeof(deferredResponseHeader));
+            bufferedMessage->prepend(&bufferedResponseHeader,
+                                     sizeof(bufferedResponseHeader));
         }
-        deferredMessage->send(deferredMessageAddress,
+        bufferedMessage->send(bufferedMessageAddress,
                               Homa::OutMessage::NO_RETRY);
-        pendingMessages.push_back(deferredMessage.get());
-        outboundMessages.push_back(std::move(deferredMessage));
+        pendingMessages.push_back(bufferedMessage.get());
+        outboundMessages.push_back(std::move(bufferedMessage));
     }
 }
 

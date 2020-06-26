@@ -23,9 +23,11 @@
 namespace Roo {
 namespace {
 
+using ::testing::_;
 using ::testing::An;
 using ::testing::ByMove;
 using ::testing::Eq;
+using ::testing::Invoke;
 using ::testing::Return;
 
 class RooPCImplTest : public ::testing::Test {
@@ -174,6 +176,47 @@ TEST_F(RooPCImplTest, destroy)
     // nothing to test
 }
 
+TEST_F(RooPCImplTest, handleResponse_basic)
+{
+    Proto::RooId rooId(0, 0);
+    Proto::BranchId rootId(rooId, 0);
+    Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
+    Proto::ResponseId responseId(Proto::TaskId(2, 2), 0);
+    Proto::ResponseHeader header;
+    header.branchId = branchId;
+    header.responseId = responseId;
+    header.manifestImplied = true;
+    header.hasManifest = true;
+    header.manifest = Proto::Manifest(rootId, branchId.taskId, 2, 0);
+
+    rpc->tasks[rootId] = false;
+    rpc->tasks[Proto::BranchId(branchId.taskId, 0)] = true;
+    rpc->manifestsOutstanding = 1;
+
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+    rpc->pendingRequests.push_back(
+        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
+    EXPECT_CALL(inMessage, acknowledge());
+    EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
+    EXPECT_CALL(outMessage, release());
+
+    EXPECT_EQ(0, rpc->expectedResponses.count(responseId));
+    EXPECT_EQ(2, rpc->tasks.size());
+    EXPECT_EQ(1, rpc->manifestsOutstanding);
+    EXPECT_EQ(0, rpc->responsesOutstanding);
+
+    rpc->handleResponse(&header, std::move(message));
+
+    EXPECT_TRUE(rpc->tasks.at(branchId));
+    EXPECT_TRUE(rpc->tasks.at(rootId));
+    EXPECT_TRUE(rpc->expectedResponses.at(responseId));
+    EXPECT_EQ(0, rpc->manifestsOutstanding);
+    EXPECT_EQ(0, rpc->responsesOutstanding);
+    EXPECT_TRUE(rpc->pendingRequests.empty());
+
+    EXPECT_CALL(inMessage, release());
+}
+
 TEST_F(RooPCImplTest, handleResponse_unexpected)
 {
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
@@ -262,46 +305,48 @@ TEST_F(RooPCImplTest, handleResponse_duplicate)
     EXPECT_EQ(0, rpc->responseQueue.size());
 }
 
+size_t
+cp(size_t, void* destination, size_t count, void* source)
+{
+    std::memcpy(destination, source, count);
+    return count;
+}
+
 TEST_F(RooPCImplTest, handleManifest)
 {
-    Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
+    Proto::BranchId branchId(Proto::TaskId(1, 1), 0);
     Proto::TaskId taskId(2, 2);
+    Proto::ManifestHeader header;
+    header.manifestCount = 1;
     Proto::Manifest manifest;
     manifest.branchId = branchId;
     manifest.taskId = taskId;
-    manifest.requestCount = 2;
-    manifest.responseCount = 2;
+    manifest.requestCount = 0;
+    manifest.responseCount = 0;
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
 
-    rpc->tasks[Proto::BranchId(taskId, 0)] = true;
-    rpc->expectedResponses[Proto::ResponseId(taskId, 0)] = true;
-
+    rpc->tasks[branchId] = false;
+    rpc->manifestsOutstanding = 1;
+    rpc->responsesOutstanding = 0;
     rpc->pendingRequests.push_back(
         std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
 
-    EXPECT_EQ(1, rpc->tasks.size());
-    EXPECT_EQ(1, rpc->expectedResponses.size());
-
+    EXPECT_CALL(inMessage, get(Eq(sizeof(Proto::ManifestHeader)), _,
+                               Eq(sizeof(Proto::Manifest))))
+        .WillOnce(
+            Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
+                             std::placeholders::_3, &manifest)));
     EXPECT_CALL(inMessage, acknowledge());
     EXPECT_CALL(inMessage, release());
-
-    rpc->handleManifest(&manifest, std::move(message));
-
-    EXPECT_EQ(1, rpc->manifestsOutstanding);
-    EXPECT_EQ(1, rpc->responsesOutstanding);
-
-    EXPECT_EQ(3, rpc->tasks.size());
-    EXPECT_TRUE(rpc->tasks.at(Proto::BranchId(taskId, 0)));
-    EXPECT_FALSE(rpc->tasks.at(Proto::BranchId(taskId, 1)));
-    EXPECT_TRUE(rpc->tasks.at(branchId));
-
-    EXPECT_EQ(2, rpc->expectedResponses.size());
-    EXPECT_TRUE(rpc->expectedResponses.at(Proto::ResponseId(taskId, 0)));
-    EXPECT_FALSE(rpc->expectedResponses.at(Proto::ResponseId(taskId, 1)));
-
-    EXPECT_FALSE(rpc->pendingRequests.empty());
-
     EXPECT_CALL(outMessage, release());
+
+    rpc->handleManifest(&header, std::move(message));
+
+    EXPECT_EQ(1, rpc->tasks.size());
+    EXPECT_EQ(0, rpc->expectedResponses.size());
+    EXPECT_EQ(0, rpc->manifestsOutstanding);
+    EXPECT_EQ(0, rpc->responsesOutstanding);
+    EXPECT_TRUE(rpc->pendingRequests.empty());
 }
 
 TEST_F(RooPCImplTest, markManifestReceived_new)
@@ -310,7 +355,8 @@ TEST_F(RooPCImplTest, markManifestReceived_new)
 
     EXPECT_EQ(0, rpc->tasks.size());
 
-    rpc->markManifestReceived(branchId);
+    SpinLock::Lock lock(rpc->mutex);
+    rpc->markManifestReceived(branchId, lock);
 
     EXPECT_EQ(1, rpc->tasks.size());
     EXPECT_TRUE(rpc->tasks.at(branchId));
@@ -323,7 +369,8 @@ TEST_F(RooPCImplTest, markManifestReceived_tracked)
     rpc->manifestsOutstanding = 1;
     EXPECT_EQ(1, rpc->tasks.size());
 
-    rpc->markManifestReceived(branchId);
+    SpinLock::Lock lock(rpc->mutex);
+    rpc->markManifestReceived(branchId, lock);
 
     EXPECT_EQ(1, rpc->tasks.size());
     EXPECT_TRUE(rpc->tasks.at(branchId));
@@ -338,7 +385,8 @@ TEST_F(RooPCImplTest, markManifestReceived_duplicate)
     VectorHandler handler;
     Debug::setLogHandler(std::ref(handler));
 
-    rpc->markManifestReceived(branchId);
+    SpinLock::Lock lock(rpc->mutex);
+    rpc->markManifestReceived(branchId, lock);
 
     EXPECT_EQ(1U, handler.messages.size());
     const Debug::DebugMessage& m = handler.messages.at(0);
@@ -352,5 +400,38 @@ TEST_F(RooPCImplTest, markManifestReceived_duplicate)
     EXPECT_TRUE(rpc->tasks.at(branchId));
     EXPECT_EQ(0, rpc->manifestsOutstanding);
 }
+
+TEST_F(RooPCImplTest, processManifest)
+{
+    Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
+    Proto::TaskId taskId(2, 2);
+    Proto::Manifest manifest;
+    manifest.branchId = branchId;
+    manifest.taskId = taskId;
+    manifest.requestCount = 2;
+    manifest.responseCount = 2;
+
+    rpc->tasks[Proto::BranchId(taskId, 0)] = true;
+    rpc->expectedResponses[Proto::ResponseId(taskId, 0)] = true;
+
+    EXPECT_EQ(1, rpc->tasks.size());
+    EXPECT_EQ(1, rpc->expectedResponses.size());
+
+    SpinLock::Lock lock(rpc->mutex);
+    rpc->processManifest(&manifest, lock);
+
+    EXPECT_EQ(1, rpc->manifestsOutstanding);
+    EXPECT_EQ(1, rpc->responsesOutstanding);
+
+    EXPECT_EQ(3, rpc->tasks.size());
+    EXPECT_TRUE(rpc->tasks.at(Proto::BranchId(taskId, 0)));
+    EXPECT_FALSE(rpc->tasks.at(Proto::BranchId(taskId, 1)));
+    EXPECT_TRUE(rpc->tasks.at(branchId));
+
+    EXPECT_EQ(2, rpc->expectedResponses.size());
+    EXPECT_TRUE(rpc->expectedResponses.at(Proto::ResponseId(taskId, 0)));
+    EXPECT_FALSE(rpc->expectedResponses.at(Proto::ResponseId(taskId, 1)));
+}
+
 }  // namespace
 }  // namespace Roo

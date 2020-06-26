@@ -113,7 +113,7 @@ SocketImpl::poll()
                 // There is no RooPC waiting for this message.
             }
         } else if (common.opcode == Proto::Opcode::Manifest) {
-            Proto::Manifest manifest;
+            Proto::ManifestHeader manifest;
             message->get(0, &manifest, sizeof(manifest));
             SpinLock::Lock lock_socket(mutex);
             auto it = rpcs.find(manifest.rooId);
