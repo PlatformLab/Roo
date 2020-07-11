@@ -79,13 +79,18 @@ SocketImpl::receive()
 void
 SocketImpl::poll()
 {
+    // Let the transport make incremental progress.
     transport->poll();
-    bool idle = true;
-    uint64_t start_tsc = PerfUtils::Cycles::rdtsc();
+
+    // Keep track of time spent doing active processing versus idle.
+    Perf::Timer activityTimer;
+    activityTimer.split();
+    uint64_t activeTime = 0;
+    uint64_t idleTime = 0;
+
     // Process incoming messages
     for (Homa::unique_ptr<Homa::InMessage> message = transport->receive();
          message; message = std::move(transport->receive())) {
-        idle = false;
         Proto::HeaderCommon common;
         message->get(0, &common, sizeof(common));
         if (common.opcode == Proto::Opcode::Request) {
@@ -126,7 +131,9 @@ SocketImpl::poll()
         } else {
             WARNING("Unexpected protocol message received.");
         }
+        activeTime += activityTimer.split();
     }
+    idleTime += activityTimer.split();
 
     // Check detached ServerTasks
     {
@@ -134,25 +141,23 @@ SocketImpl::poll()
         auto it = detachedTasks.begin();
         while (it != detachedTasks.end()) {
             ServerTaskImpl* task = *it;
+            idleTime += activityTimer.split();
             bool not_done = task->poll();
+            activityTimer.split();
             if (not_done) {
                 ++it;
             } else {
                 // ServerTask is done polling
                 it = detachedTasks.erase(it);
                 delete task;
-                idle = false;
+                activeTime += activityTimer.split();
             }
         }
+        idleTime += activityTimer.split();
     }
 
-    // Track cycles spent processing
-    uint64_t elapsed_cycles = PerfUtils::Cycles::rdtsc() - start_tsc;
-    if (!idle) {
-        Perf::counters.active_cycles.add(elapsed_cycles);
-    } else {
-        Perf::counters.idle_cycles.add(elapsed_cycles);
-    }
+    Perf::counters.active_cycles.add(activeTime);
+    Perf::counters.idle_cycles.add(idleTime);
 }
 
 /**

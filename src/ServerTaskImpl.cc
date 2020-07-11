@@ -168,15 +168,25 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination,
 bool
 ServerTaskImpl::poll()
 {
+    // Keep track of time spent doing active processing versus idle.
+    Perf::Timer timer;
+    timer.split();
+    uint64_t activeTime = 0;
+    uint64_t idleTime = 0;
+
+    bool isInProgress = true;
+
     if (request->dropped()) {
         // Nothing left to do
-        return false;
+        isInProgress = false;
+        activeTime += timer.split();
     } else if (pendingMessages.empty()) {
         // No more pending messages.
         if (!isInitialRequest) {
             request->acknowledge();
         }
-        return false;
+        isInProgress = false;
+        activeTime += timer.split();
     } else {
         // Check for any remaining pending messages
         auto it = pendingMessages.begin();
@@ -185,16 +195,25 @@ ServerTaskImpl::poll()
             if (status == Homa::OutMessage::Status::COMPLETED) {
                 // Remove and keep checking for other pendingRequests
                 it = pendingMessages.erase(it);
+                activeTime += timer.split();
             } else if (status == Homa::OutMessage::Status::FAILED) {
                 request->fail();
                 // Failed, no need to keep checking
-                return false;
+                isInProgress = false;
+                activeTime += timer.split();
+                break;
             } else {
                 ++it;
+                idleTime += timer.split();
             }
         }
+        idleTime += timer.split();
     }
-    return true;
+
+    Perf::counters.active_cycles.add(activeTime);
+    Perf::counters.idle_cycles.add(idleTime);
+
+    return isInProgress;
 }
 
 /**
