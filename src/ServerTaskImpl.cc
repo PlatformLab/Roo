@@ -76,30 +76,10 @@ ServerTaskImpl::getRequest()
 }
 
 /**
- * @copydoc ServerTask::allocOutMessage()
- */
-Homa::unique_ptr<Homa::OutMessage>
-ServerTaskImpl::allocOutMessage()
-{
-    Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
-    // TODO(cstlee): Change API or Homa so that the request and response headers
-    //               don't have to be the same size.
-    // Make sure the request and response headers are the same size so that we
-    // can allocate the same amount of space for the header no matter if this
-    // OutMessage will be used for a request or a response.
-    static_assert(sizeof(Proto::RequestHeader) <=
-                  sizeof(Proto::ResponseHeader));
-    static_assert(sizeof(Proto::RequestHeader) ==
-                  sizeof(Proto::ResponseHeader));
-    message->reserve(sizeof(Proto::RequestHeader));
-    return message;
-}
-
-/**
  * @copydoc ServerTask::reply()
  */
 void
-ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
+ServerTaskImpl::reply(const void* response, size_t length)
 {
     // The ServerTask always buffers that last outbound message so that any
     // necessary manifest information can be piggy-back on the last message.
@@ -112,6 +92,9 @@ ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
 
     // Format the response message
     bufferedMessageIsRequest = false;
+    Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
+    message->reserve(sizeof(Proto::ResponseHeader));
+    message->append(response, length);
     new (&bufferedResponseHeader) Proto::ResponseHeader(
         rooId, branchId, Proto::ResponseId(taskId, responseCount));
     responseCount += 1;
@@ -129,8 +112,8 @@ ServerTaskImpl::reply(Homa::unique_ptr<Homa::OutMessage> message)
  * @copydoc ServerTask::delegate()
  */
 void
-ServerTaskImpl::delegate(Homa::Driver::Address destination,
-                         Homa::unique_ptr<Homa::OutMessage> message)
+ServerTaskImpl::delegate(Homa::Driver::Address destination, const void* request,
+                         size_t length)
 {
     // The ServerTask always buffers that last outbound message so that any
     // necessary manifest information can be piggy-back on the last message.
@@ -143,6 +126,9 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination,
 
     // Format the delegated request message
     bufferedMessageIsRequest = true;
+    Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
+    message->reserve(sizeof(Proto::RequestHeader));
+    message->append(request, length);
     Proto::BranchId newBranchId(taskId, requestCount);
     requestCount += 1;
     new (&bufferedRequestHeader) Proto::RequestHeader(rooId, newBranchId);

@@ -30,6 +30,7 @@ RooPCImpl::RooPCImpl(SocketImpl* socket, Proto::RooId rooId)
     , requestCount(0)
     , pendingRequests()
     , responseQueue()
+    , responses()
     , tasks()
     , manifestsOutstanding(0)
     , expectedResponses()
@@ -42,25 +43,14 @@ RooPCImpl::RooPCImpl(SocketImpl* socket, Proto::RooId rooId)
 RooPCImpl::~RooPCImpl() = default;
 
 /**
- * @copydoc RooPCImpl::allocRequest()
- */
-Homa::unique_ptr<Homa::OutMessage>
-RooPCImpl::allocRequest()
-{
-    Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
-    message->reserve(sizeof(Proto::RequestHeader));
-    return message;
-}
-
-/**
  * @copydoc RooPCImpl::send()
  */
 void
-RooPCImpl::send(Homa::Driver::Address destination,
-                Homa::unique_ptr<Homa::OutMessage> request)
+RooPCImpl::send(Homa::Driver::Address destination, const void* request,
+                size_t length)
 {
     SpinLock::Lock lock(mutex);
-    Perf::counters.tx_message_bytes.add(request->length());
+    Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
     Homa::Driver::Address replyAddress =
         socket->transport->getDriver()->getLocalAddress();
     Proto::BranchId branchId(rooId, requestCount);
@@ -68,26 +58,28 @@ RooPCImpl::send(Homa::Driver::Address destination,
     Proto::RequestHeader outboundHeader(rooId, branchId, true);
     socket->transport->getDriver()->addressToWireFormat(
         replyAddress, &outboundHeader.replyAddress);
-    request->prepend(&outboundHeader, sizeof(outboundHeader));
+    message->append(&outboundHeader, sizeof(outboundHeader));
+    message->append(request, length);
+    Perf::counters.tx_message_bytes.add(sizeof(outboundHeader) + length);
 
     // Track spawned tasks
     tasks.insert({branchId, false});
     manifestsOutstanding++;
 
-    request->send(destination, Homa::OutMessage::NO_RETRY);
-    pendingRequests.push_back(std::move(request));
+    message->send(destination, Homa::OutMessage::NO_RETRY);
+    pendingRequests.push_back(std::move(message));
 }
 
 /**
  * @copydoc RooPCImpl::receive()
  */
-Homa::unique_ptr<Homa::InMessage>
+Homa::InMessage*
 RooPCImpl::receive()
 {
     SpinLock::Lock lock(mutex);
-    Homa::unique_ptr<Homa::InMessage> response = nullptr;
+    Homa::InMessage* response = nullptr;
     if (!responseQueue.empty()) {
-        response = std::move(responseQueue.front());
+        response = responseQueue.front();
         responseQueue.pop_front();
     }
     return response;
@@ -176,12 +168,14 @@ RooPCImpl::handleResponse(Proto::ResponseHeader* header,
             // Task not previously tracked.
             manifestsOutstanding++;
         }
-        responseQueue.push_back(std::move(message));
+        responseQueue.push_back(message.get());
+        responses.push_back(std::move(message));
     } else if (ret.first->second == false) {
         // Expected response received.
         ret.first->second = true;
         responsesOutstanding--;
-        responseQueue.push_back(std::move(message));
+        responseQueue.push_back(message.get());
+        responses.push_back(std::move(message));
     } else {
         // Response already received
         NOTICE("Duplicate response received for RooPC (%lu, %lu)",

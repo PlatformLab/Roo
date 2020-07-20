@@ -87,39 +87,29 @@ TEST_F(RooPCImplTest, constructor)
     EXPECT_EQ(rooId, rpc.rooId);
 }
 
-TEST_F(RooPCImplTest, allocRequest)
-{
-    EXPECT_CALL(transport, alloc())
-        .WillOnce(
-            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
-    EXPECT_CALL(outMessage, reserve(Eq(sizeof(Proto::RequestHeader))));
-
-    Homa::unique_ptr<Homa::OutMessage> message = rpc->allocRequest();
-
-    EXPECT_EQ(&outMessage, message.get());
-    EXPECT_CALL(outMessage, release());
-}
-
 TEST_F(RooPCImplTest, send)
 {
-    Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
+    char* buffer[1024];
 
     EXPECT_EQ(0, rpc->requestCount);
     EXPECT_TRUE(rpc->tasks.find(Proto::BranchId(rooId, 0)) == rpc->tasks.end());
     EXPECT_EQ(0U, rpc->manifestsOutstanding);
     EXPECT_TRUE(rpc->pendingRequests.empty());
 
-    EXPECT_CALL(outMessage, length());
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
     EXPECT_CALL(transport, getDriver()).Times(2);
     EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(replyAddress));
     EXPECT_CALL(driver,
                 addressToWireFormat(Eq(replyAddress),
                                     An<Homa::Driver::WireFormatAddress*>()));
     EXPECT_CALL(outMessage,
-                prepend(An<const void*>(), Eq(sizeof(Proto::RequestHeader))));
+                append(An<const void*>(), Eq(sizeof(Proto::RequestHeader))));
+    EXPECT_CALL(outMessage, append(buffer, Eq(sizeof(buffer))));
     EXPECT_CALL(outMessage, send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
 
-    rpc->send(0xFEED, std::move(message));
+    rpc->send(0xFEED, buffer, sizeof(buffer));
 
     EXPECT_EQ(1, rpc->requestCount);
     EXPECT_TRUE(rpc->tasks.find(Proto::BranchId(rooId, 0)) != rpc->tasks.end());
@@ -131,17 +121,15 @@ TEST_F(RooPCImplTest, send)
 
 TEST_F(RooPCImplTest, receive)
 {
-    rpc->responseQueue.push_back(
-        std::move(Homa::unique_ptr<Homa::InMessage>(&inMessage)));
-    {
-        Homa::unique_ptr<Homa::InMessage> message = rpc->receive();
-        EXPECT_EQ(&inMessage, message.get());
-        EXPECT_CALL(inMessage, release());
-    }
-    {
-        Homa::unique_ptr<Homa::InMessage> message = rpc->receive();
-        EXPECT_FALSE(message);
-    }
+    Homa::InMessage* message = nullptr;
+
+    rpc->responseQueue.push_back(&inMessage);
+
+    message = rpc->receive();
+    EXPECT_EQ(&inMessage, message);
+
+    message = rpc->receive();
+    EXPECT_EQ(nullptr, message);
 }
 
 TEST_F(RooPCImplTest, checkStatus)
@@ -262,12 +250,14 @@ TEST_F(RooPCImplTest, handleResponse_expected)
     rpc->expectedResponses[responseId] = false;
     rpc->responsesOutstanding = 1;
     EXPECT_EQ(0, rpc->responseQueue.size());
+    EXPECT_EQ(0, rpc->responses.size());
 
     rpc->handleResponse(&header, std::move(message));
 
     EXPECT_TRUE(rpc->expectedResponses.at(responseId));
     EXPECT_EQ(0, rpc->responsesOutstanding);
     EXPECT_EQ(1, rpc->responseQueue.size());
+    EXPECT_EQ(1, rpc->responses.size());
     EXPECT_TRUE(rpc->pendingRequests.empty());
 
     EXPECT_CALL(inMessage, release());
@@ -286,6 +276,7 @@ TEST_F(RooPCImplTest, handleResponse_duplicate)
     rpc->expectedResponses[responseId] = true;
     EXPECT_EQ(0, rpc->responsesOutstanding);
     EXPECT_EQ(0, rpc->responseQueue.size());
+    EXPECT_EQ(0, rpc->responses.size());
 
     VectorHandler handler;
     Debug::setLogHandler(std::ref(handler));
@@ -303,6 +294,7 @@ TEST_F(RooPCImplTest, handleResponse_duplicate)
     EXPECT_TRUE(rpc->expectedResponses.at(responseId));
     EXPECT_EQ(0, rpc->responsesOutstanding);
     EXPECT_EQ(0, rpc->responseQueue.size());
+    EXPECT_EQ(0, rpc->responses.size());
 }
 
 size_t

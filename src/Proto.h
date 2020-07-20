@@ -281,8 +281,6 @@ struct RequestHeader {
                                                    ///< address.
     bool hasManifest;   ///< True if the header holds a piggy-backed manifest.
     Manifest manifest;  ///< A piggy-backed manifest (may be unfilled).
-    // TODO(cstlee): remove pad.
-    char pad[0];  // Hack to make Request and Response headers the same length.
 
     /// RequestHeader default constructor.
     RequestHeader()

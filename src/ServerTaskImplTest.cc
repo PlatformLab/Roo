@@ -121,21 +121,6 @@ TEST_F(ServerTaskImplTest, getRequest)
     EXPECT_EQ(&inMessage, task->getRequest());
 }
 
-TEST_F(ServerTaskImplTest, allocOutMessage)
-{
-    initDefaultTask();
-
-    EXPECT_CALL(transport, alloc())
-        .WillOnce(
-            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
-    EXPECT_CALL(outMessage, reserve(Eq(sizeof(Proto::RequestHeader))));
-
-    Homa::unique_ptr<Homa::OutMessage> message = task->allocOutMessage();
-
-    EXPECT_EQ(&outMessage, message.get());
-    EXPECT_CALL(outMessage, release());
-}
-
 TEST_F(ServerTaskImplTest, reply)
 {
     initDefaultTask();
@@ -143,7 +128,7 @@ TEST_F(ServerTaskImplTest, reply)
     task->hasUnsentManifest = true;
     task->delegatedManifest.taskId = task->rooId;
 
-    Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
+    char* buffer[1024];
 
     EXPECT_EQ(0, task->requestCount);
     EXPECT_EQ(0, task->responseCount);
@@ -151,7 +136,13 @@ TEST_F(ServerTaskImplTest, reply)
     EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->bufferedMessage);
 
-    task->reply(std::move(message));
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, reserve(Eq(sizeof(Proto::ResponseHeader))));
+    EXPECT_CALL(outMessage, append(Eq(buffer), Eq(sizeof(buffer))));
+
+    task->reply(buffer, sizeof(buffer));
 
     EXPECT_FALSE(task->bufferedMessageIsRequest);
     EXPECT_EQ(task->rooId, task->bufferedResponseHeader.rooId);
@@ -178,7 +169,7 @@ TEST_F(ServerTaskImplTest, delegate)
     task->hasUnsentManifest = true;
     task->delegatedManifest.taskId = task->rooId;
 
-    Homa::unique_ptr<Homa::OutMessage> message(&outMessage);
+    char* buffer[1024];
 
     EXPECT_EQ(0, task->requestCount);
     EXPECT_EQ(0, task->responseCount);
@@ -186,12 +177,17 @@ TEST_F(ServerTaskImplTest, delegate)
     EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->bufferedMessage);
 
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, reserve(Eq(sizeof(Proto::RequestHeader))));
+    EXPECT_CALL(outMessage, append(Eq(buffer), Eq(sizeof(buffer))));
     EXPECT_CALL(transport, getDriver());
     EXPECT_CALL(driver,
                 addressToWireFormat(Eq(replyAddress),
                                     An<Homa::Driver::WireFormatAddress*>()));
 
-    task->delegate(0xFEED, std::move(message));
+    task->delegate(0xFEED, buffer, sizeof(buffer));
 
     EXPECT_TRUE(task->bufferedMessageIsRequest);
     EXPECT_EQ(1, task->requestCount);

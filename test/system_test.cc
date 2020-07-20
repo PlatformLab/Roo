@@ -94,45 +94,38 @@ serverMain(Node* server, std::vector<std::string> addresses)
         }
         Roo::unique_ptr<Roo::ServerTask> task(server->socket->receive());
         if (task) {
-            MessageHeader header;
-            task->getRequest()->get(0, &header, sizeof(MessageHeader));
+            MessageHeader reqhdr;
+            task->getRequest()->get(0, &reqhdr, sizeof(MessageHeader));
 
-            char buf[header.length];
-            task->getRequest()->get(sizeof(MessageHeader), &buf, header.length);
+            char message[sizeof(MessageHeader) + reqhdr.length];
+            task->getRequest()->get(0, &message, sizeof(message));
 
             if (_PRINT_SERVER_) {
                 std::cout << "  -> Server " << server->id
-                          << " (rooId: " << header.id << " hops:" << header.hops
+                          << " (rooId: " << reqhdr.id << " hops:" << reqhdr.hops
                           << ")" << std::endl;
             }
 
-            header.hops--;
-            if (header.hops == 0) {
-                Homa::unique_ptr<Homa::OutMessage> response =
-                    task->allocOutMessage();
-                response->append(&header, sizeof(MessageHeader));
-                response->append(buf, header.length);
-                task->reply(std::move(response));
+            MessageHeader* header = reinterpret_cast<MessageHeader*>(message);
+            header->hops--;
+            if (header->hops == 0) {
+                task->reply(message, sizeof(message));
                 if (_PRINT_SERVER_) {
                     std::cout << "  <- Server " << server->id
-                              << " (rooId: " << header.id
-                              << " hops:" << header.hops << ")" << std::endl;
+                              << " (rooId: " << header->id
+                              << " hops:" << header->hops << ")" << std::endl;
                 }
             } else {
-                int fanout = header.fanout;
+                int fanout = reqhdr.fanout;
                 for (int i = 0; i < fanout; ++i) {
-                    Homa::unique_ptr<Homa::OutMessage> request =
-                        task->allocOutMessage();
-                    request->append(&header, sizeof(MessageHeader));
-                    request->append(buf, header.length);
                     std::string nextAddress = addresses[dis(gen)];
                     Homa::Driver::Address nextServerAddress =
                         server->driver.getAddress(&nextAddress);
-                    task->delegate(nextServerAddress, std::move(request));
+                    task->delegate(nextServerAddress, message, sizeof(message));
                     if (_PRINT_SERVER_) {
                         std::cout << "  <- Server " << server->id
-                                  << " (rooId: " << header.id
-                                  << " hops:" << header.hops << ")"
+                                  << " (rooId: " << header->id
+                                  << " hops:" << header->hops << ")"
                                   << std::endl;
                     }
                 }
@@ -161,29 +154,27 @@ clientMain(int count, int hops, int fanout, int size,
     Node client(1);
     for (int i = 0; i < count; ++i) {
         uint64_t id = nextId++;
-        char payload[size];
+        char request[sizeof(MessageHeader) + size];
+        MessageHeader* header = reinterpret_cast<MessageHeader*>(request);
+        char* payload = &(request[sizeof(MessageHeader)]);
         for (int i = 0; i < size; ++i) {
             payload[i] = randData(gen);
         }
 
         Roo::unique_ptr<Roo::RooPC> rpc(client.socket->allocRooPC());
-        MessageHeader header;
-        header.id = id;
-        header.hops = hops;
-        header.fanout = fanout;
-        header.length = size;
+        header->id = id;
+        header->hops = hops;
+        header->fanout = fanout;
+        header->length = size;
 
         for (int i = 0; i < fanout; ++i) {
             std::string destAddress = addresses[randAddr(gen)];
-            Homa::unique_ptr<Homa::OutMessage> request = rpc->allocRequest();
-            request->append(&header, sizeof(MessageHeader));
-            request->append(payload, size);
             if (_PRINT_CLIENT_) {
-                std::cout << "Client -> (rooId: " << header.id
-                          << " hops:" << header.hops << ")" << std::endl;
+                std::cout << "Client -> (rooId: " << header->id
+                          << " hops:" << header->hops << ")" << std::endl;
             }
-            rpc->send(client.driver.getAddress(&destAddress),
-                      std::move(request));
+            rpc->send(client.driver.getAddress(&destAddress), request,
+                      sizeof(request));
         }
 
         rpc->wait();
@@ -194,8 +185,8 @@ clientMain(int count, int hops, int fanout, int size,
             continue;
         }
 
-        Homa::unique_ptr<Homa::InMessage> response = rpc->receive();
-        while (response) {
+        Homa::InMessage* response = rpc->receive();
+        while (response != nullptr) {
             MessageHeader header;
             char buf[size];
             response->get(0, &header, sizeof(MessageHeader));
@@ -213,7 +204,7 @@ clientMain(int count, int hops, int fanout, int size,
                 std::cout << "Client <- (rooId: " << header.id
                           << " hops:" << header.hops << ")" << std::endl;
             }
-            response = std::move(rpc->receive());
+            response = rpc->receive();
         }
     }
     return numFailed;

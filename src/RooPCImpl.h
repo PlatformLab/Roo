@@ -36,10 +36,9 @@ class RooPCImpl : public RooPC {
   public:
     explicit RooPCImpl(SocketImpl* socket, Proto::RooId rooId);
     virtual ~RooPCImpl();
-    virtual Homa::unique_ptr<Homa::OutMessage> allocRequest();
-    virtual void send(Homa::Driver::Address destination,
-                      Homa::unique_ptr<Homa::OutMessage> request);
-    virtual Homa::unique_ptr<Homa::InMessage> receive();
+    virtual void send(Homa::Driver::Address destination, const void* request,
+                      size_t length);
+    virtual Homa::InMessage* receive();
     virtual Status checkStatus();
     virtual void wait();
 
@@ -80,7 +79,10 @@ class RooPCImpl : public RooPC {
     std::deque<Homa::unique_ptr<Homa::OutMessage> > pendingRequests;
 
     /// Responses for this RooPC that have not yet been delievered.
-    std::deque<Homa::unique_ptr<Homa::InMessage> > responseQueue;
+    std::deque<Homa::InMessage*> responseQueue;
+
+    /// All responses that have been received.
+    std::deque<Homa::unique_ptr<Homa::InMessage> > responses;
 
     /// Tracks the tasks spawned from RooPC. Maps from the identifer of the
     /// request branch that spawned the task to a boolean value. The value is

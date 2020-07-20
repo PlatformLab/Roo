@@ -73,35 +73,28 @@ class RooPC {
     };
 
     /**
-     * Return a new OutMessage that can be sent as a request for this RooPC.
-     *
-     * @return
-     *      A newly allocated message object.  Ownership of the message object
-     *      is transferred to the caller.
-     */
-    virtual Homa::unique_ptr<Homa::OutMessage> allocRequest() = 0;
-
-    /**
      * Send a new request for this RooPC asynchronously.
      *
      * @param destination
      *      The network address to which the request will be sent.
      * @param request
-     *      The request that should be sent.  Ownership of the request message
-     *      is transferred to this RooPC.
+     *      First byte of a buffer contained the request message to be sent.
+     * @param length
+     *      Number of bytes in the request message.
      */
-    virtual void send(Homa::Driver::Address destination,
-                      Homa::unique_ptr<Homa::OutMessage> request) = 0;
+    virtual void send(Homa::Driver::Address destination, const void* request,
+                      size_t length) = 0;
 
     /**
      * Return a received response for this RooPC.
      *
      * @return
-     *      Returns a received response message, if available; otherwise, a
-     *      nullptr is returned.  Ownership of returned response message objects
-     *      are transferred to the caller.
+     *      Returns an incoming response message, if available; otherwise, a
+     *      nullptr is returned.  Ownership of the returned message is NOT
+     *      passed to the caller; the lifetime of the returned message is tied
+     *      to this RooPC
      */
-    virtual Homa::unique_ptr<Homa::InMessage> receive() = 0;
+    virtual Homa::InMessage* receive() = 0;
 
     /**
      * Check and return the current Status of this RooPC.
@@ -150,36 +143,27 @@ class ServerTask {
     virtual Homa::InMessage* getRequest() = 0;
 
     /**
-     * Return a message that can be populated use as a rely message or an
-     * additional request message.
-     *
-     * @return
-     *      Pointer to an OutMessage object associated with this ServerTask; the
-     *      message should only be used with this ServerTask. Ownership is
-     *      transferred to the caller.
-     */
-    virtual Homa::unique_ptr<Homa::OutMessage> allocOutMessage() = 0;
-
-    /**
      * Send a message back to the initial RooPC requestor.
      *
-     * @param message
-     *      Response message to return to RooPC initiator.  Ownership of the
-     *      message object is transferred to this ServerTask.
+     * @param response
+     *      First byte of a buffer contained the response message to be sent.
+     * @param length
+     *      Number of bytes in the response message.
      */
-    virtual void reply(Homa::unique_ptr<Homa::OutMessage> message) = 0;
+    virtual void reply(const void* response, size_t length) = 0;
 
     /**
      * Send a message as an additional request for the associated RooPC.
      *
      * @param destination
      *      Address to which the new request message should be sent.
-     * @param message
-     *      New request message to be sent.  Ownership of the message object is
-     *      transferred to this ServerTask.
+     * @param request
+     *      First byte of a buffer contained the request message to be sent.
+     * @param length
+     *      Number of bytes in the request message.
      */
     virtual void delegate(Homa::Driver::Address destination,
-                          Homa::unique_ptr<Homa::OutMessage> message) = 0;
+                          const void* request, size_t length) = 0;
 
   protected:
     /**

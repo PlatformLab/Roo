@@ -1,6 +1,6 @@
 cmake_minimum_required (VERSION 3.11)
 
-project(Roo VERSION 0.1.0.0 LANGUAGES CXX)
+project(Roo VERSION 0.2.0.0 LANGUAGES CXX)
 
 ################################################################################
 ## Dependencies ################################################################
