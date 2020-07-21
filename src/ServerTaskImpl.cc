@@ -79,7 +79,7 @@ ServerTaskImpl::getRequest()
  * @copydoc ServerTask::reply()
  */
 void
-ServerTaskImpl::reply(const void* response, size_t length)
+ServerTaskImpl::reply(const void* response, std::size_t length)
 {
     // The ServerTask always buffers that last outbound message so that any
     // necessary manifest information can be piggy-back on the last message.
@@ -113,7 +113,7 @@ ServerTaskImpl::reply(const void* response, size_t length)
  */
 void
 ServerTaskImpl::delegate(Homa::Driver::Address destination, const void* request,
-                         size_t length)
+                         std::size_t length)
 {
     // The ServerTask always buffers that last outbound message so that any
     // necessary manifest information can be piggy-back on the last message.

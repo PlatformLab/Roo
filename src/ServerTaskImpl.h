@@ -40,9 +40,9 @@ class ServerTaskImpl : public ServerTask {
                             Homa::unique_ptr<Homa::InMessage> request);
     virtual ~ServerTaskImpl();
     virtual Homa::InMessage* getRequest();
-    virtual void reply(const void* response, size_t length);
+    virtual void reply(const void* response, std::size_t length);
     virtual void delegate(Homa::Driver::Address destination,
-                          const void* request, size_t length);
+                          const void* request, std::size_t length);
     bool poll();
 
   protected:

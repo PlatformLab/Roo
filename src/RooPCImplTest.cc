@@ -298,7 +298,7 @@ TEST_F(RooPCImplTest, handleResponse_duplicate)
 }
 
 size_t
-cp(size_t, void* destination, size_t count, void* source)
+cp(size_t, void* destination, std::size_t count, void* source)
 {
     std::memcpy(destination, source, count);
     return count;

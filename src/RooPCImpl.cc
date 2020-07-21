@@ -47,7 +47,7 @@ RooPCImpl::~RooPCImpl() = default;
  */
 void
 RooPCImpl::send(Homa::Driver::Address destination, const void* request,
-                size_t length)
+                std::size_t length)
 {
     SpinLock::Lock lock(mutex);
     Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
@@ -200,7 +200,7 @@ RooPCImpl::handleManifest(Proto::ManifestHeader* header,
                           Homa::unique_ptr<Homa::InMessage> message)
 {
     SpinLock::Lock lock(mutex);
-    size_t offest = sizeof(Proto::ManifestHeader);
+    std::size_t offest = sizeof(Proto::ManifestHeader);
     for (size_t i = 0; i < header->manifestCount; ++i) {
         Proto::Manifest manifest;
         message->get(offest + (sizeof(Proto::Manifest) * i), &manifest,

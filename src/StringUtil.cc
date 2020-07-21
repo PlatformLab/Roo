@@ -86,7 +86,7 @@ format(const char* format, ...)
 
     // We're not really sure how big of a buffer will be necessary.
     // Try 1K, if not the return value will tell us how much is necessary.
-    size_t bufSize = 1024;
+    std::size_t bufSize = 1024;
     while (true) {
         char buf[bufSize];
         // vsnprintf trashes the va_list, so copy it first
@@ -95,7 +95,7 @@ format(const char* format, ...)
         int r = vsnprintf(buf, bufSize, format, aq);
         va_end(aq);
         assert(r >= 0);  // old glibc versions returned -1
-        size_t r2 = size_t(r);
+        std::size_t r2 = std::size_t(r);
         if (r2 < bufSize) {
             s = buf;
             break;
@@ -131,7 +131,7 @@ isPrintable(const char* str)
  *      data before that are nice to display in a single line of text.
  */
 bool
-isPrintable(const void* data, size_t length)
+isPrintable(const void* data, std::size_t length)
 {
     const char* begin = static_cast<const char*>(data);
     const char* end = begin + length - 1;
@@ -161,9 +161,9 @@ void
 replaceAll(std::string& haystack, const std::string& needle,
            const std::string& replacement)
 {
-    size_t startPos = 0;
+    std::size_t startPos = 0;
     while (true) {
-        size_t replacePos = haystack.find(needle, startPos);
+        std::size_t replacePos = haystack.find(needle, startPos);
         if (replacePos == haystack.npos)
             return;
         haystack.replace(replacePos, needle.length(), replacement);

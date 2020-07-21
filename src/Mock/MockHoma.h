@@ -68,9 +68,9 @@ class MockInMessage : public ::Homa::InMessage {
     MOCK_CONST_METHOD0(acknowledge, void());
     MOCK_CONST_METHOD0(dropped, bool());
     MOCK_CONST_METHOD0(fail, void());
-    MOCK_CONST_METHOD3(get,
-                       size_t(size_t offset, void* destination, size_t count));
-    MOCK_CONST_METHOD0(length, size_t());
+    MOCK_CONST_METHOD3(get, std::size_t(size_t offset, void* destination,
+                                        std::size_t count));
+    MOCK_CONST_METHOD0(length, std::size_t());
     MOCK_METHOD1(strip, void(size_t count));
 
   protected:
@@ -82,11 +82,11 @@ class MockInMessage : public ::Homa::InMessage {
  */
 class MockOutMessage : public ::Homa::OutMessage {
   public:
-    MOCK_METHOD2(append, void(const void* source, size_t count));
+    MOCK_METHOD2(append, void(const void* source, std::size_t count));
     MOCK_METHOD0(cancel, void());
     MOCK_CONST_METHOD0(getStatus, Status());
-    MOCK_CONST_METHOD0(length, size_t());
-    MOCK_METHOD2(prepend, void(const void* source, size_t count));
+    MOCK_CONST_METHOD0(length, std::size_t());
+    MOCK_METHOD2(prepend, void(const void* source, std::size_t count));
     MOCK_METHOD1(reserve, void(size_t count));
     MOCK_METHOD2(send, void(::Homa::Driver::Address destination,
                             ::Homa::OutMessage::Options options));

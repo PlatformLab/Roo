@@ -37,7 +37,7 @@ class RooPCImpl : public RooPC {
     explicit RooPCImpl(SocketImpl* socket, Proto::RooId rooId);
     virtual ~RooPCImpl();
     virtual void send(Homa::Driver::Address destination, const void* request,
-                      size_t length);
+                      std::size_t length);
     virtual Homa::InMessage* receive();
     virtual Status checkStatus();
     virtual void wait();

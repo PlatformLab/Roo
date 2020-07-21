@@ -83,7 +83,7 @@ class RooPC {
      *      Number of bytes in the request message.
      */
     virtual void send(Homa::Driver::Address destination, const void* request,
-                      size_t length) = 0;
+                      std::size_t length) = 0;
 
     /**
      * Return a received response for this RooPC.
@@ -150,7 +150,7 @@ class ServerTask {
      * @param length
      *      Number of bytes in the response message.
      */
-    virtual void reply(const void* response, size_t length) = 0;
+    virtual void reply(const void* response, std::size_t length) = 0;
 
     /**
      * Send a message as an additional request for the associated RooPC.
@@ -163,7 +163,7 @@ class ServerTask {
      *      Number of bytes in the request message.
      */
     virtual void delegate(Homa::Driver::Address destination,
-                          const void* request, size_t length) = 0;
+                          const void* request, std::size_t length) = 0;
 
   protected:
     /**

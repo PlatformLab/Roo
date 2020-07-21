@@ -28,7 +28,7 @@ std::string flags(int value,
 std::string format(const char* format, ...)
     __attribute__((format(printf, 1, 2)));
 bool isPrintable(const char* str);
-bool isPrintable(const void* data, size_t length);
+bool isPrintable(const void* data, std::size_t length);
 std::string join(const std::vector<std::string>& components,
                  const std::string& glue);
 void replaceAll(std::string& haystack, const std::string& needle,

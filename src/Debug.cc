@@ -231,11 +231,11 @@ calculateLengthFilePrefix()
     const char* start = __FILE__;
     const char* match = strstr(__FILE__, "src/Debug.cc");
     assert(match != NULL);
-    return size_t(match - start);
+    return std::size_t(match - start);
 }
 
 /// Stores result of calculateLengthFilePrefix().
-const size_t lengthFilePrefix = calculateLengthFilePrefix();
+const std::size_t lengthFilePrefix = calculateLengthFilePrefix();
 
 /**
  * Strip out the common prefix of a filename to get a path from the project's
