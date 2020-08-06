@@ -46,6 +46,11 @@ class RooPCImpl : public RooPC {
                         Homa::unique_ptr<Homa::InMessage> message);
     void handleManifest(Proto::ManifestHeader* header,
                         Homa::unique_ptr<Homa::InMessage> message);
+    void handlePong(Proto::PongHeader* header,
+                    Homa::unique_ptr<Homa::InMessage> message);
+    void handleError(Proto::ErrorHeader* header,
+                     Homa::unique_ptr<Homa::InMessage> message);
+    bool handleTimeout();
 
     /**
      * Return this RooPC's identifier.
@@ -59,6 +64,24 @@ class RooPCImpl : public RooPC {
     virtual void destroy();
 
   private:
+    /**
+     * Metadata for a task spawned from this RooPC.
+     */
+    struct TaskInfo {
+        /// True, if a manifest for this task has been received signaling that
+        /// the task has finished processing; false, otherwise.
+        bool complete;
+
+        /// Id of the request that should be pinged to keep this task alive.
+        Proto::RequestId pingRequestId;
+
+        /// Address to which pings should be sent.
+        Homa::Driver::Address pingAddress;
+
+        /// The number of pings sent since last received pong response.
+        uint pingCount;
+    };
+
     void markManifestReceived(Proto::BranchId branchId,
                               const SpinLock::Lock& lock);
     void processManifest(Proto::Manifest* manifest, const SpinLock::Lock& lock);
@@ -72,6 +95,9 @@ class RooPCImpl : public RooPC {
     /// Unique identifier for this RooPC.
     Proto::RooId rooId;
 
+    /// True if an error message was received; false, otherwise.
+    bool error;
+
     /// Number of requests sent.
     uint64_t requestCount;
 
@@ -84,11 +110,12 @@ class RooPCImpl : public RooPC {
     /// All responses that have been received.
     std::deque<Homa::unique_ptr<Homa::InMessage> > responses;
 
-    /// Tracks the tasks spawned from RooPC. Maps from the identifer of the
-    /// request branch that spawned the task to a boolean value. The value is
-    /// false, if a manifest for the task has not yet been received; otherwise,
-    /// the value is true.
-    std::unordered_map<Proto::BranchId, bool, Proto::BranchId::Hasher> tasks;
+    /// Ping messages sent during the last timeout.
+    std::deque<Homa::unique_ptr<Homa::OutMessage> > pings;
+
+    /// Tracks the tasks spawned from RooPC.
+    std::unordered_map<Proto::BranchId, TaskInfo, Proto::BranchId::Hasher>
+        tasks;
 
     /// The number of expected branch manifests that have not yet been
     /// received. (Tracked seperately so the _tasks_ structure doesn't need to

@@ -22,6 +22,7 @@
 #include <deque>
 
 #include "Proto.h"
+#include "SpinLock.h"
 
 namespace Roo {
 
@@ -43,7 +44,19 @@ class ServerTaskImpl : public ServerTask {
     virtual void reply(const void* response, std::size_t length);
     virtual void delegate(Homa::Driver::Address destination,
                           const void* request, std::size_t length);
+
     bool poll();
+    void handlePing(Proto::PingHeader* header,
+                    Homa::unique_ptr<Homa::InMessage> message);
+    bool handleTimeout();
+
+    /**
+     * Return the identifier for the request that initiated this ServerTask.
+     */
+    Proto::RequestId getRequestId() const
+    {
+        return requestId;
+    }
 
   protected:
     virtual void destroy();
@@ -61,14 +74,11 @@ class ServerTaskImpl : public ServerTask {
     /// Identifier the RooPC that triggered this ServerTask.
     Proto::RooId const rooId;
 
-    /// Identifier for the request branch to which this ServerTask belongs.
-    Proto::BranchId const branchId;
+    /// Identifier for the request that initiated this ServerTask.
+    Proto::RequestId const requestId;
 
     /// Identifier for this task.
     Proto::TaskId const taskId;
-
-    /// Identify whether the request can directly from a RooPC client.
-    bool const isInitialRequest;
 
     /// Message containing a task request; may come directly from the RooPC
     /// client, or from another server that has delegated a request to us.
@@ -90,6 +100,30 @@ class ServerTaskImpl : public ServerTask {
 
     /// Messages that have been sent by this task but have not yet completed.
     std::deque<Homa::OutMessage*> pendingMessages;
+
+    /// Hold information used to handle pings and timeouts.
+    struct {
+        /// Outbound request information.
+        struct RequestInfo {
+            /// Id of the tracked request.
+            Proto::RequestId requestId;
+
+            /// Address of the server to which the request was sent.
+            Homa::Driver::Address destination;
+        };
+
+        /// Protects access to this structure.
+        SpinLock mutex;
+
+        /// Requests being tracked.
+        std::deque<RequestInfo> requests;
+
+        /// Last set of sent ping and pong messages.
+        std::deque<Homa::unique_ptr<Homa::OutMessage>> controlMessages;
+
+        /// Number of pings received since the last timeout.
+        uint pingCount;
+    } pingInfo;
 
     /// True if the buffered message is a request. False if the buffered message
     /// is a response.

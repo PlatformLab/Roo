@@ -15,6 +15,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
+
 #include "Mock/MockHoma.h"
 #include "ServerTaskImpl.h"
 #include "SocketImpl.h"
@@ -26,6 +28,7 @@ using ::testing::_;
 using ::testing::An;
 using ::testing::ByMove;
 using ::testing::Eq;
+using ::testing::InSequence;
 using ::testing::Return;
 using ::testing::TypedEq;
 
@@ -66,7 +69,7 @@ class ServerTaskImplTest : public ::testing::Test {
         EXPECT_CALL(inMessage, strip(An<size_t>()));
         Proto::RequestHeader header;
         header.rooId = Proto::RooId(1, 1);
-        header.branchId = Proto::BranchId(Proto::RooId(2, 2), 3);
+        header.requestId = Proto::RequestId{{{2, 2}, 3}, 0};
         Homa::unique_ptr<Homa::InMessage> request(&inMessage);
         task = new ServerTaskImpl(socket, Proto::TaskId(42, 1), &header,
                                   std::move(request));
@@ -85,9 +88,9 @@ TEST_F(ServerTaskImplTest, constructor)
 {
     Proto::RequestHeader header;
     header.rooId = Proto::RooId(1, 1);
-    header.branchId = Proto::BranchId(Proto::RooId(2, 2), 3);
+    header.requestId = Proto::RequestId{{{2, 2}, 3}, 0};
     header.hasManifest = true;
-    header.manifest.branchId = Proto::BranchId(header.rooId, 0);
+    header.manifest.requestId = Proto::RequestId{{header.rooId, 0}, 0};
     Homa::unique_ptr<Homa::InMessage> request(&inMessage);
 
     EXPECT_CALL(transport, getDriver());
@@ -101,12 +104,10 @@ TEST_F(ServerTaskImplTest, constructor)
                         std::move(request));
     EXPECT_EQ(socket, task.socket);
     EXPECT_EQ(header.rooId, task.rooId);
-    EXPECT_EQ(header.branchId, task.branchId);
+    EXPECT_EQ(header.requestId, task.requestId);
     EXPECT_TRUE(task.hasUnsentManifest);
-    EXPECT_EQ(Proto::BranchId(header.rooId, 0),
-              task.delegatedManifest.branchId);
+    EXPECT_EQ(header.manifest.requestId, task.delegatedManifest.requestId);
     EXPECT_EQ(Proto::TaskId(42, 1), task.taskId);
-    EXPECT_FALSE(task.isInitialRequest);
     EXPECT_EQ(&inMessage, task.request.get());
     EXPECT_EQ(0xDEADBEEF, task.replyAddress);
     EXPECT_EQ(0, task.responseCount);
@@ -146,7 +147,7 @@ TEST_F(ServerTaskImplTest, reply)
 
     EXPECT_FALSE(task->bufferedMessageIsRequest);
     EXPECT_EQ(task->rooId, task->bufferedResponseHeader.rooId);
-    EXPECT_EQ(task->branchId, task->bufferedResponseHeader.branchId);
+    EXPECT_EQ(task->requestId.branchId, task->bufferedResponseHeader.branchId);
     EXPECT_EQ(Proto::ResponseId(task->taskId, 0),
               task->bufferedResponseHeader.responseId);
     EXPECT_EQ(1, task->responseCount);
@@ -192,8 +193,8 @@ TEST_F(ServerTaskImplTest, delegate)
     EXPECT_TRUE(task->bufferedMessageIsRequest);
     EXPECT_EQ(1, task->requestCount);
     EXPECT_EQ(task->rooId, task->bufferedRequestHeader.rooId);
-    EXPECT_EQ(Proto::BranchId(task->taskId, 0),
-              task->bufferedRequestHeader.branchId);
+    EXPECT_EQ(Proto::RequestId({task->taskId, 0}, 0),
+              task->bufferedRequestHeader.requestId);
     EXPECT_TRUE(task->bufferedRequestHeader.hasManifest);
     EXPECT_EQ(task->delegatedManifest.taskId,
               task->bufferedRequestHeader.manifest.taskId);
@@ -230,9 +231,7 @@ TEST_F(ServerTaskImplTest, poll_done)
 {
     initDefaultTask();
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_FALSE(task->isInitialRequest);
     EXPECT_CALL(inMessage, dropped()).WillOnce(Return(false));
-    EXPECT_CALL(inMessage, acknowledge());
     EXPECT_FALSE(task->poll());
 }
 
@@ -243,8 +242,217 @@ TEST_F(ServerTaskImplTest, poll_failed)
     EXPECT_CALL(inMessage, dropped()).WillOnce(Return(false));
     EXPECT_CALL(outMessage, getStatus)
         .WillOnce(Return(Homa::OutMessage::Status::FAILED));
-    EXPECT_CALL(inMessage, fail());
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::ErrorHeader))));
+    EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
+                                 Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
+
     EXPECT_FALSE(task->poll());
+
+    EXPECT_CALL(outMessage, release());
+}
+
+ACTION_P(SaveBlob, pointer)
+{
+    std::memcpy(pointer, arg0, arg1);
+}
+
+TEST_F(ServerTaskImplTest, handlePing_basic)
+{
+    initDefaultTask();
+    Proto::PingHeader ping;
+    Proto::PongHeader pong;
+
+    Proto::PingHeader header;
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+
+    Proto::RequestId delegatedRequestId({task->taskId, 0}, 0);
+
+    task->pingInfo.requests.push_back({delegatedRequestId, 0xABCD});
+    task->detached = true;
+    task->requestCount = 1;
+    task->responseCount = 8;
+    task->pingInfo.pingCount = 0;
+
+    InSequence s;
+    // Expect Ping
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PingHeader))))
+        .WillOnce(SaveBlob(&ping));
+    EXPECT_CALL(outMessage,
+                send(Eq(0xABCD), Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
+
+    // Expect getLocalAddress
+    EXPECT_CALL(transport, getDriver()).Times(2);
+    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
+    EXPECT_CALL(driver,
+                addressToWireFormat(Eq(0xFEED),
+                                    An<Homa::Driver::WireFormatAddress*>()));
+    // Expect Pong
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))))
+        .WillOnce(SaveBlob(&pong));
+    EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
+                                 Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
+
+    EXPECT_CALL(inMessage, release());
+
+    task->handlePing(&header, std::move(message));
+
+    EXPECT_EQ(1, task->pingInfo.pingCount);
+    EXPECT_EQ(delegatedRequestId, ping.requestId);
+    EXPECT_EQ(task->rooId, pong.rooId);
+    EXPECT_TRUE(pong.branchComplete);
+    EXPECT_EQ(task->requestId, pong.manifest.requestId);
+    EXPECT_EQ(task->taskId, pong.manifest.taskId);
+    EXPECT_EQ(1, pong.manifest.requestCount);
+    EXPECT_EQ(8, pong.manifest.responseCount);
+
+    EXPECT_CALL(outMessage, release()).Times(2);
+}
+
+TEST_F(ServerTaskImplTest, handlePing_detached_single_response)
+{
+    initDefaultTask();
+    Proto::PongHeader pong;
+
+    Proto::PingHeader header;
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+
+    task->detached = true;
+    task->requestCount = 0;
+    task->responseCount = 1;
+    task->pingInfo.pingCount = 0;
+
+    InSequence s;
+    // Expect getLocalAddress
+    EXPECT_CALL(transport, getDriver()).Times(2);
+    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
+    EXPECT_CALL(driver,
+                addressToWireFormat(Eq(0xFEED),
+                                    An<Homa::Driver::WireFormatAddress*>()));
+    // Expect Pong
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))))
+        .WillOnce(SaveBlob(&pong));
+    EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
+                                 Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
+
+    EXPECT_CALL(inMessage, release());
+
+    task->handlePing(&header, std::move(message));
+
+    EXPECT_EQ(task->rooId, pong.rooId);
+    EXPECT_TRUE(pong.branchComplete);
+    EXPECT_EQ(task->requestId, pong.manifest.requestId);
+    EXPECT_EQ(task->taskId, pong.manifest.taskId);
+    EXPECT_EQ(0, pong.manifest.requestCount);
+    EXPECT_EQ(1, pong.manifest.responseCount);
+
+    EXPECT_CALL(outMessage, release()).Times(1);
+}
+
+TEST_F(ServerTaskImplTest, handlePing_detached_single_delegate)
+{
+    initDefaultTask();
+    Proto::PongHeader pong;
+
+    Proto::PingHeader header;
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+
+    task->detached = true;
+    task->requestCount = 1;
+    task->responseCount = 0;
+    task->pingInfo.pingCount = 0;
+
+    InSequence s;
+    // Expect getLocalAddress
+    EXPECT_CALL(transport, getDriver()).Times(2);
+    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
+    EXPECT_CALL(driver,
+                addressToWireFormat(Eq(0xFEED),
+                                    An<Homa::Driver::WireFormatAddress*>()));
+    // Expect Pong
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))))
+        .WillOnce(SaveBlob(&pong));
+    EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
+                                 Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
+
+    EXPECT_CALL(inMessage, release());
+
+    task->handlePing(&header, std::move(message));
+
+    EXPECT_EQ(task->rooId, pong.rooId);
+    EXPECT_FALSE(pong.branchComplete);
+    EXPECT_EQ(task->requestId, pong.manifest.requestId);
+    EXPECT_EQ(task->taskId, pong.manifest.taskId);
+
+    EXPECT_CALL(outMessage, release()).Times(1);
+}
+
+TEST_F(ServerTaskImplTest, handlePing_in_progress)
+{
+    initDefaultTask();
+    Proto::PongHeader pong;
+
+    Proto::PingHeader header;
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+
+    task->detached = false;
+    task->requestCount = 0;
+    task->responseCount = 5;
+    task->pingInfo.pingCount = 0;
+
+    InSequence s;
+    // Expect getLocalAddress
+    EXPECT_CALL(transport, getDriver()).Times(2);
+    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
+    EXPECT_CALL(driver,
+                addressToWireFormat(Eq(0xFEED),
+                                    An<Homa::Driver::WireFormatAddress*>()));
+    // Expect Pong
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))))
+        .WillOnce(SaveBlob(&pong));
+    EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
+                                 Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
+
+    EXPECT_CALL(inMessage, release());
+
+    task->handlePing(&header, std::move(message));
+
+    EXPECT_EQ(task->rooId, pong.rooId);
+    EXPECT_FALSE(pong.branchComplete);
+
+    EXPECT_CALL(outMessage, release()).Times(1);
+}
+
+TEST_F(ServerTaskImplTest, handleTimeout)
+{
+    initDefaultTask();
+    task->pingInfo.pingCount = 1;
+    EXPECT_TRUE(task->handleTimeout());
+    EXPECT_EQ(0, task->pingInfo.pingCount);
+    EXPECT_FALSE(task->handleTimeout());
 }
 
 TEST_F(ServerTaskImplTest, destroy_noMessages)
@@ -260,12 +468,18 @@ TEST_F(ServerTaskImplTest, destroy_noMessages)
     EXPECT_CALL(transport, alloc())
         .WillOnce(
             Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(transport, getDriver()).Times(2);
+    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
+    EXPECT_CALL(driver,
+                addressToWireFormat(Eq(0xFEED),
+                                    An<Homa::Driver::WireFormatAddress*>()));
     EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::ManifestHeader))));
     EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::Manifest))));
     EXPECT_CALL(outMessage, append(Eq(&task->delegatedManifest),
                                    Eq(sizeof(Proto::Manifest))));
     EXPECT_CALL(outMessage,
-                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY)));
+                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
+                                          Homa::OutMessage::NO_KEEP_ALIVE)));
 
     task->destroy();
 
@@ -294,11 +508,15 @@ TEST_F(ServerTaskImplTest, destroy_request_single)
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedRequestHeader),
                                     Eq(sizeof(Proto::RequestHeader))));
-    EXPECT_CALL(outMessage, send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
+    EXPECT_CALL(outMessage,
+                send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
 
     task->destroy();
 
-    EXPECT_EQ(task->branchId, task->bufferedRequestHeader.branchId);
+    EXPECT_EQ(Proto::RequestId(task->requestId.branchId,
+                               task->requestId.sequence + 1),
+              task->bufferedRequestHeader.requestId);
     EXPECT_EQ(&outMessage, task->pendingMessages.back());
     EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
     EXPECT_TRUE(task->detached);
@@ -325,7 +543,8 @@ TEST_F(ServerTaskImplTest, destroy_response_single)
     EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedResponseHeader),
                                     Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(outMessage,
-                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY)));
+                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
+                                          Homa::OutMessage::NO_KEEP_ALIVE)));
 
     task->destroy();
 
@@ -353,15 +572,22 @@ TEST_F(ServerTaskImplTest, destroy_request_multiple)
     EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->detached);
 
+    EXPECT_CALL(transport, getDriver()).Times(2);
+    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
+    EXPECT_CALL(driver,
+                addressToWireFormat(Eq(0xFEED),
+                                    An<Homa::Driver::WireFormatAddress*>()));
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedRequestHeader),
                                     Eq(sizeof(Proto::RequestHeader))));
-    EXPECT_CALL(outMessage, send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
+    EXPECT_CALL(outMessage,
+                send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
 
     task->destroy();
 
     EXPECT_TRUE(task->bufferedRequestHeader.hasManifest);
-    EXPECT_EQ(task->branchId, task->bufferedRequestHeader.manifest.branchId);
+    EXPECT_EQ(task->requestId, task->bufferedRequestHeader.manifest.requestId);
     EXPECT_EQ(task->taskId, task->bufferedRequestHeader.manifest.taskId);
     EXPECT_EQ(task->requestCount,
               task->bufferedRequestHeader.manifest.requestCount);
@@ -390,16 +616,22 @@ TEST_F(ServerTaskImplTest, destroy_response_multiple)
     EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->detached);
 
+    EXPECT_CALL(transport, getDriver()).Times(2);
+    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
+    EXPECT_CALL(driver,
+                addressToWireFormat(Eq(0xFEED),
+                                    An<Homa::Driver::WireFormatAddress*>()));
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedResponseHeader),
                                     Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(outMessage,
-                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY)));
+                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
+                                          Homa::OutMessage::NO_KEEP_ALIVE)));
 
     task->destroy();
 
     EXPECT_TRUE(task->bufferedResponseHeader.hasManifest);
-    EXPECT_EQ(task->branchId, task->bufferedResponseHeader.manifest.branchId);
+    EXPECT_EQ(task->requestId, task->bufferedResponseHeader.manifest.requestId);
     EXPECT_EQ(task->taskId, task->bufferedResponseHeader.manifest.taskId);
     EXPECT_EQ(task->requestCount,
               task->bufferedResponseHeader.manifest.requestCount);
@@ -430,7 +662,9 @@ TEST_F(ServerTaskImplTest, sendBufferedMessage_request)
     EXPECT_CALL(outMessage, length());
     EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedRequestHeader),
                                     Eq(sizeof(Proto::RequestHeader))));
-    EXPECT_CALL(outMessage, send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
+    EXPECT_CALL(outMessage,
+                send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
 
     task->sendBufferedMessage();
 
@@ -459,7 +693,8 @@ TEST_F(ServerTaskImplTest, sendBufferedMessage_response)
     EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedResponseHeader),
                                     Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(outMessage,
-                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY)));
+                send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
+                                          Homa::OutMessage::NO_KEEP_ALIVE)));
 
     task->sendBufferedMessage();
 

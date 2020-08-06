@@ -27,6 +27,7 @@ namespace Roo {
 RooPCImpl::RooPCImpl(SocketImpl* socket, Proto::RooId rooId)
     : socket(socket)
     , rooId(rooId)
+    , error(false)
     , requestCount(0)
     , pendingRequests()
     , responseQueue()
@@ -55,7 +56,8 @@ RooPCImpl::send(Homa::Driver::Address destination, const void* request,
         socket->transport->getDriver()->getLocalAddress();
     Proto::BranchId branchId(rooId, requestCount);
     requestCount += 1;
-    Proto::RequestHeader outboundHeader(rooId, branchId, true);
+    Proto::RequestId requestId(branchId, 0);
+    Proto::RequestHeader outboundHeader(rooId, requestId);
     socket->transport->getDriver()->addressToWireFormat(
         replyAddress, &outboundHeader.replyAddress);
     message->append(&outboundHeader, sizeof(outboundHeader));
@@ -63,10 +65,11 @@ RooPCImpl::send(Homa::Driver::Address destination, const void* request,
     Perf::counters.tx_message_bytes.add(sizeof(outboundHeader) + length);
 
     // Track spawned tasks
-    tasks.insert({branchId, false});
+    tasks.insert({branchId, {false, requestId, destination, 0}});
     manifestsOutstanding++;
 
-    message->send(destination, Homa::OutMessage::NO_RETRY);
+    message->send(destination,
+                  Homa::OutMessage::NO_RETRY | Homa::OutMessage::NO_KEEP_ALIVE);
     pendingRequests.push_back(std::move(message));
 }
 
@@ -96,6 +99,8 @@ RooPCImpl::checkStatus()
         return Status::NOT_STARTED;
     } else if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
         return Status::COMPLETED;
+    } else if (error) {
+        return Status::FAILED;
     }
 
     // Check for failed requests
@@ -144,7 +149,6 @@ RooPCImpl::handleResponse(Proto::ResponseHeader* header,
                           Homa::unique_ptr<Homa::InMessage> message)
 {
     SpinLock::Lock lock(mutex);
-    message->acknowledge();
     message->strip(sizeof(Proto::ResponseHeader));
 
     // Process an implied manifiest if available.
@@ -162,12 +166,6 @@ RooPCImpl::handleResponse(Proto::ResponseHeader* header,
     auto ret = expectedResponses.insert({header->responseId, true});
     if (ret.second) {
         // New unanticipated response received.
-        // Make sure a new task is tracked if it isn't already.
-        auto checkTask = tasks.insert({header->branchId, false});
-        if (checkTask.second) {
-            // Task not previously tracked.
-            manifestsOutstanding++;
-        }
         responseQueue.push_back(message.get());
         responses.push_back(std::move(message));
     } else if (ret.first->second == false) {
@@ -207,12 +205,105 @@ RooPCImpl::handleManifest(Proto::ManifestHeader* header,
                      sizeof(Proto::Manifest));
         processManifest(&manifest, lock);
     }
-    message->acknowledge();
 
     if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
         // RooPC is complete
         pendingRequests.clear();
     }
+}
+
+/**
+ * Process an incoming Pong message.
+ *
+ * @param header
+ *      Parsed contents of the Pong message.
+ * @param message
+ *      The incoming message containing the Pong.
+ */
+void
+RooPCImpl::handlePong(Proto::PongHeader* header,
+                      Homa::unique_ptr<Homa::InMessage> message)
+{
+    SpinLock::Lock lock(mutex);
+    (void)message;
+    if (header->branchComplete) {
+        processManifest(&header->manifest, lock);
+    } else {
+        Proto::RequestId requestId = header->manifest.requestId;
+        auto it = tasks.find(requestId.branchId);
+        if (it != tasks.end()) {
+            TaskInfo* task = &it->second;
+            if (!(task->pingRequestId.branchId == requestId.branchId) ||
+                task->pingRequestId.sequence < requestId.sequence) {
+                // Update the ping target
+                task->pingRequestId = requestId;
+                task->pingAddress = socket->transport->getDriver()->getAddress(
+                    &header->manifest.serverAddress);
+            }
+            task->pingCount = 0;
+        }
+    }
+
+    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
+        // RooPC is complete
+        pendingRequests.clear();
+    }
+}
+
+/**
+ * Process an incoming Error message.
+ *
+ * @param header
+ *      Parsed contents of the Error message.
+ * @param message
+ *      The incoming message containing the Error.
+ */
+void
+RooPCImpl::handleError(Proto::ErrorHeader* header,
+                       Homa::unique_ptr<Homa::InMessage> message)
+{
+    SpinLock::Lock lock(mutex);
+    (void)header;
+    (void)message;
+    error = true;
+}
+
+/**
+ * Handle a timeout event.
+ *
+ * @return
+ *      True if the RooPC timeout should be reset; false, otherwise.
+ */
+bool
+RooPCImpl::handleTimeout()
+{
+    SpinLock::Lock lock(mutex);
+    pings.clear();
+    for (auto& it : tasks) {
+        TaskInfo* info = &it.second;
+
+        // Check if task is still in progress.
+        if (info->complete) {
+            // nothing to do
+            continue;
+        }
+
+        // Check if task has timedout
+        if (info->pingCount > 3) {
+            error = true;
+            return false;
+        }
+
+        // Send a ping.
+        Homa::unique_ptr<Homa::OutMessage> ping = socket->transport->alloc();
+        Proto::PingHeader pingHeader(info->pingRequestId);
+        ping->append(&pingHeader, sizeof(Proto::PingHeader));
+        ping->send(info->pingAddress, Homa::OutMessage::NO_RETRY |
+                                          Homa::OutMessage::NO_KEEP_ALIVE);
+        pings.push_back(std::move(ping));
+        info->pingCount++;
+    }
+    return true;
 }
 
 /**
@@ -230,13 +321,13 @@ RooPCImpl::markManifestReceived(Proto::BranchId branchId,
 {
     (void)lock;
 
-    auto checkTask = tasks.insert({branchId, true});
+    auto checkTask = tasks.insert({branchId, {true, {}, {}, 0}});
     if (checkTask.second) {
         // Task not previously tracked.
         // Nothing to do;
-    } else if (checkTask.first->second == false) {
+    } else if (checkTask.first->second.complete == false) {
         // Task previously tracked.
-        checkTask.first->second = true;
+        checkTask.first->second.complete = true;
         manifestsOutstanding--;
     } else {
         // Manifest previously received.
@@ -260,10 +351,14 @@ RooPCImpl::processManifest(Proto::Manifest* manifest,
 {
     (void)lock;
 
+    Homa::Driver::Address taskServerAddress =
+        socket->transport->getDriver()->getAddress(&manifest->serverAddress);
+
     // Add tracked task branches.
     for (uint64_t i = 0; i < manifest->requestCount; ++i) {
         Proto::BranchId branchId(manifest->taskId, i);
-        auto checkTask = tasks.insert({branchId, false});
+        auto checkTask = tasks.insert(
+            {branchId, {false, manifest->requestId, taskServerAddress, 0}});
         if (checkTask.second) {
             // Task not previously tracked.
             manifestsOutstanding++;
@@ -281,7 +376,7 @@ RooPCImpl::processManifest(Proto::Manifest* manifest,
     }
 
     // Mark manifest received.
-    markManifestReceived(manifest->branchId, lock);
+    markManifestReceived(manifest->requestId.branchId, lock);
 }
 
 }  // namespace Roo

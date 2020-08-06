@@ -22,6 +22,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <list>
 #include <memory>
 #include <unordered_map>
 
@@ -56,6 +57,21 @@ class SocketImpl : public Socket {
     Homa::Transport* const transport;
 
   private:
+    /**
+     * Associates a timeout value with an object.
+     */
+    template <typename T>
+    struct Timeout {
+        /// Time when the associated object should time out.
+        std::chrono::steady_clock::time_point expirationTime;
+        /// The object associated with this timeout.
+        T object;
+    };
+
+    void processIncomingMessages();
+    void checkDetachedTasks();
+    void checkClientTimeouts();
+    void checkTaskTimeouts();
     Proto::TaskId allocTaskId();
 
     /// Identifer for this socket.  This identifer must be unique among all
@@ -71,6 +87,14 @@ class SocketImpl : public Socket {
     /// Tracks the set of RooPC objects that were initiated by this socket.
     std::unordered_map<Proto::RooId, RooPCImpl*, Proto::RooId::Hasher> rpcs;
 
+    /// RooPC ids in increasing timeout order.
+    std::list<Timeout<Proto::RooId>> rpcTimeouts;
+
+    /// Tracks the set of live ServerTask objects managed by this socket.
+    std::unordered_map<Proto::RequestId, ServerTaskImpl*,
+                       Proto::RequestId::Hasher>
+        tasks;
+
     /// Collection of ServerTask objects (incoming requests) that haven't been
     /// requested by the application.
     std::deque<ServerTaskImpl*> pendingTasks;
@@ -78,6 +102,11 @@ class SocketImpl : public Socket {
     /// ServerTask objects that have been processed by the application and
     /// remanded to the care of the Socket to complete transmission.
     std::deque<ServerTaskImpl*> detachedTasks;
+
+    /// ServerTask objects have completed transmission and are waiting to be
+    /// garbage collected after a timeout. ServerTask objects are held in
+    /// timeout order.
+    std::list<Timeout<ServerTaskImpl*>> taskTimeouts;
 };
 
 }  // namespace Roo

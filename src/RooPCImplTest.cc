@@ -29,6 +29,7 @@ using ::testing::ByMove;
 using ::testing::Eq;
 using ::testing::Invoke;
 using ::testing::Return;
+using ::testing::TypedEq;
 
 class RooPCImplTest : public ::testing::Test {
   public:
@@ -90,9 +91,10 @@ TEST_F(RooPCImplTest, constructor)
 TEST_F(RooPCImplTest, send)
 {
     char* buffer[1024];
+    Proto::RequestId requestId{{rooId, 0}, 0};
 
     EXPECT_EQ(0, rpc->requestCount);
-    EXPECT_TRUE(rpc->tasks.find(Proto::BranchId(rooId, 0)) == rpc->tasks.end());
+    EXPECT_TRUE(rpc->tasks.find(requestId.branchId) == rpc->tasks.end());
     EXPECT_EQ(0U, rpc->manifestsOutstanding);
     EXPECT_TRUE(rpc->pendingRequests.empty());
 
@@ -107,12 +109,18 @@ TEST_F(RooPCImplTest, send)
     EXPECT_CALL(outMessage,
                 append(An<const void*>(), Eq(sizeof(Proto::RequestHeader))));
     EXPECT_CALL(outMessage, append(buffer, Eq(sizeof(buffer))));
-    EXPECT_CALL(outMessage, send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY)));
+    EXPECT_CALL(outMessage,
+                send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
 
     rpc->send(0xFEED, buffer, sizeof(buffer));
 
     EXPECT_EQ(1, rpc->requestCount);
-    EXPECT_TRUE(rpc->tasks.find(Proto::BranchId(rooId, 0)) != rpc->tasks.end());
+    ASSERT_TRUE(rpc->tasks.find(requestId.branchId) != rpc->tasks.end());
+    EXPECT_FALSE(rpc->tasks.at(requestId.branchId).complete);
+    EXPECT_EQ(requestId, rpc->tasks.at(requestId.branchId).pingRequestId);
+    EXPECT_EQ(0xFEED, rpc->tasks.at(requestId.branchId).pingAddress);
+    EXPECT_EQ(0, rpc->tasks.at(requestId.branchId).pingCount);
     EXPECT_EQ(1U, rpc->manifestsOutstanding);
     EXPECT_FALSE(rpc->pendingRequests.empty());
 
@@ -142,6 +150,10 @@ TEST_F(RooPCImplTest, checkStatus)
     EXPECT_EQ(RooPC::Status::COMPLETED, rpc->checkStatus());
 
     rpc->manifestsOutstanding = 1;
+    rpc->error = true;
+    EXPECT_EQ(RooPC::Status::FAILED, rpc->checkStatus());
+
+    rpc->error = false;
     EXPECT_CALL(outMessage, getStatus())
         .WillOnce(Return(Homa::OutMessage::Status::FAILED));
     EXPECT_EQ(RooPC::Status::FAILED, rpc->checkStatus());
@@ -168,6 +180,7 @@ TEST_F(RooPCImplTest, handleResponse_basic)
 {
     Proto::RooId rooId(0, 0);
     Proto::BranchId rootId(rooId, 0);
+    Proto::RequestId requestId(rootId, 0);
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
     Proto::ResponseId responseId(Proto::TaskId(2, 2), 0);
     Proto::ResponseHeader header;
@@ -175,17 +188,21 @@ TEST_F(RooPCImplTest, handleResponse_basic)
     header.responseId = responseId;
     header.manifestImplied = true;
     header.hasManifest = true;
-    header.manifest = Proto::Manifest(rootId, branchId.taskId, 2, 0);
+    header.manifest = Proto::Manifest(requestId, branchId.taskId, 2, 0);
 
-    rpc->tasks[rootId] = false;
-    rpc->tasks[Proto::BranchId(branchId.taskId, 0)] = true;
+    rpc->tasks[rootId] = {false, {}, {}, 0};
+    rpc->tasks[Proto::BranchId(branchId.taskId, 0)] = {true, {}, {}, 0};
     rpc->manifestsOutstanding = 1;
 
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
     rpc->pendingRequests.push_back(
         std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
-    EXPECT_CALL(inMessage, acknowledge());
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
+    EXPECT_CALL(transport, getDriver());
+    EXPECT_CALL(driver,
+                getAddress(TypedEq<const Homa::Driver::WireFormatAddress*>(
+                    &header.manifest.serverAddress)))
+        .WillOnce(Return(0xFEED));
     EXPECT_CALL(outMessage, release());
 
     EXPECT_EQ(0, rpc->expectedResponses.count(responseId));
@@ -195,8 +212,8 @@ TEST_F(RooPCImplTest, handleResponse_basic)
 
     rpc->handleResponse(&header, std::move(message));
 
-    EXPECT_TRUE(rpc->tasks.at(branchId));
-    EXPECT_TRUE(rpc->tasks.at(rootId));
+    EXPECT_TRUE(rpc->tasks.at(branchId).complete);
+    EXPECT_TRUE(rpc->tasks.at(rootId).complete);
     EXPECT_TRUE(rpc->expectedResponses.at(responseId));
     EXPECT_EQ(0, rpc->manifestsOutstanding);
     EXPECT_EQ(0, rpc->responsesOutstanding);
@@ -207,6 +224,8 @@ TEST_F(RooPCImplTest, handleResponse_basic)
 
 TEST_F(RooPCImplTest, handleResponse_unexpected)
 {
+    Proto::RooId rooId(0, 0);
+    Proto::BranchId rootId(rooId, 0);
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
     Proto::ResponseId responseId(Proto::TaskId(2, 2), 2);
     Proto::ResponseHeader header;
@@ -215,19 +234,20 @@ TEST_F(RooPCImplTest, handleResponse_unexpected)
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
     rpc->pendingRequests.push_back(
         std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
-    EXPECT_CALL(inMessage, acknowledge());
+    rpc->tasks[rootId] = {false, {}, {}, 0};
+    rpc->manifestsOutstanding = 1;
+
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
 
     EXPECT_EQ(0, rpc->expectedResponses.count(responseId));
-    EXPECT_EQ(0, rpc->tasks.count(branchId));
-    EXPECT_EQ(0, rpc->manifestsOutstanding);
+    EXPECT_EQ(1, rpc->tasks.size());
+    EXPECT_EQ(1, rpc->manifestsOutstanding);
 
     rpc->handleResponse(&header, std::move(message));
 
     EXPECT_EQ(1, rpc->expectedResponses.count(responseId));
     EXPECT_TRUE(rpc->expectedResponses.at(responseId));
-    EXPECT_EQ(1, rpc->tasks.count(branchId));
-    EXPECT_FALSE(rpc->tasks.at(branchId));
+    EXPECT_EQ(1, rpc->tasks.size());
     EXPECT_EQ(1, rpc->manifestsOutstanding);
     EXPECT_FALSE(rpc->pendingRequests.empty());
 
@@ -243,7 +263,6 @@ TEST_F(RooPCImplTest, handleResponse_expected)
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
     rpc->pendingRequests.push_back(
         std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
-    EXPECT_CALL(inMessage, acknowledge());
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(outMessage, release());
 
@@ -269,7 +288,6 @@ TEST_F(RooPCImplTest, handleResponse_duplicate)
     Proto::ResponseHeader header;
     header.responseId = responseId;
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
-    EXPECT_CALL(inMessage, acknowledge());
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(inMessage, release());
 
@@ -311,13 +329,13 @@ TEST_F(RooPCImplTest, handleManifest)
     Proto::ManifestHeader header;
     header.manifestCount = 1;
     Proto::Manifest manifest;
-    manifest.branchId = branchId;
+    manifest.requestId = Proto::RequestId(branchId, 0);
     manifest.taskId = taskId;
     manifest.requestCount = 0;
     manifest.responseCount = 0;
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
 
-    rpc->tasks[branchId] = false;
+    rpc->tasks[branchId] = {false, {}, {}, 0};
     rpc->manifestsOutstanding = 1;
     rpc->responsesOutstanding = 0;
     rpc->pendingRequests.push_back(
@@ -328,7 +346,10 @@ TEST_F(RooPCImplTest, handleManifest)
         .WillOnce(
             Invoke(std::bind(cp, std::placeholders::_1, std::placeholders::_2,
                              std::placeholders::_3, &manifest)));
-    EXPECT_CALL(inMessage, acknowledge());
+    EXPECT_CALL(transport, getDriver());
+    EXPECT_CALL(driver,
+                getAddress(An<const Homa::Driver::WireFormatAddress*>()))
+        .WillOnce(Return(0xFEED));
     EXPECT_CALL(inMessage, release());
     EXPECT_CALL(outMessage, release());
 
@@ -341,6 +362,157 @@ TEST_F(RooPCImplTest, handleManifest)
     EXPECT_TRUE(rpc->pendingRequests.empty());
 }
 
+TEST_F(RooPCImplTest, handlePong_branchComplete)
+{
+    Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
+    Proto::RequestId requestId(branchId, 0);
+    Proto::TaskId taskId(2, 2);
+    Proto::PongHeader header;
+    header.branchComplete = true;
+    header.manifest.requestId = requestId;
+    header.manifest.taskId = taskId;
+    header.manifest.requestCount = 0;
+    header.manifest.responseCount = 0;
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+
+    rpc->tasks[branchId] = {false, {}, {}, 0};
+    rpc->manifestsOutstanding = 1;
+    rpc->pendingRequests.push_back(
+        Homa::unique_ptr<Homa::OutMessage>(&outMessage));
+
+    EXPECT_FALSE(rpc->tasks.at(branchId).complete);
+    EXPECT_EQ(1, rpc->tasks.size());
+
+    EXPECT_CALL(transport, getDriver());
+    EXPECT_CALL(driver,
+                getAddress(TypedEq<const Homa::Driver::WireFormatAddress*>(
+                    &header.manifest.serverAddress)))
+        .WillOnce(Return(0xFEED));
+    EXPECT_CALL(outMessage, release());
+    EXPECT_CALL(inMessage, release());
+
+    rpc->handlePong(&header, std::move(message));
+
+    EXPECT_EQ(0, rpc->manifestsOutstanding);
+    EXPECT_TRUE(rpc->tasks.at(branchId).complete);
+}
+
+TEST_F(RooPCImplTest, handlePong_branchIncomplete)
+{
+    Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
+    Proto::RequestId rootId({{0, 0}, 0}, 0);
+    Proto::RequestId requestId(branchId, 0);
+    Proto::RequestId delegateId(branchId, 1);
+    Proto::TaskId taskId(2, 2);
+    Proto::PongHeader header;
+    header.branchComplete = false;
+    header.manifest.requestId = requestId;
+    header.manifest.taskId = taskId;
+    header.manifest.requestCount = 0;
+    header.manifest.responseCount = 0;
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+
+    rpc->tasks[branchId] = {false, rootId, {}, 42};
+    rpc->manifestsOutstanding = 1;
+    rpc->pendingRequests.push_back(
+        Homa::unique_ptr<Homa::OutMessage>(&outMessage));
+
+    EXPECT_FALSE(rpc->tasks.at(branchId).complete);
+    EXPECT_EQ(1, rpc->tasks.size());
+
+    // Overwrite parent ping location
+    EXPECT_CALL(transport, getDriver());
+    EXPECT_CALL(driver,
+                getAddress(TypedEq<const Homa::Driver::WireFormatAddress*>(
+                    &header.manifest.serverAddress)))
+        .WillOnce(Return(0xFEED));
+    EXPECT_CALL(inMessage, release());
+
+    rpc->handlePong(&header, std::move(message));
+
+    EXPECT_FALSE(rpc->tasks.at(branchId).complete);
+    EXPECT_EQ(requestId, rpc->tasks.at(branchId).pingRequestId);
+    EXPECT_EQ(0xFEED, rpc->tasks.at(branchId).pingAddress);
+    EXPECT_EQ(0, rpc->tasks.at(branchId).pingCount);
+    EXPECT_EQ(1, rpc->manifestsOutstanding);
+
+    // Overwrite with delegate
+    message.reset(&inMessage);
+    header.manifest.requestId = delegateId;
+    EXPECT_CALL(transport, getDriver());
+    EXPECT_CALL(driver,
+                getAddress(TypedEq<const Homa::Driver::WireFormatAddress*>(
+                    &header.manifest.serverAddress)))
+        .WillOnce(Return(0xBEEF));
+    EXPECT_CALL(inMessage, release());
+
+    rpc->handlePong(&header, std::move(message));
+
+    EXPECT_FALSE(rpc->tasks.at(branchId).complete);
+    EXPECT_EQ(delegateId, rpc->tasks.at(branchId).pingRequestId);
+    EXPECT_EQ(0xBEEF, rpc->tasks.at(branchId).pingAddress);
+    EXPECT_EQ(0, rpc->tasks.at(branchId).pingCount);
+    EXPECT_EQ(1, rpc->manifestsOutstanding);
+
+    EXPECT_CALL(outMessage, release());
+}
+
+TEST_F(RooPCImplTest, handleError)
+{
+    Proto::ErrorHeader header;
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+
+    EXPECT_CALL(inMessage, release());
+    EXPECT_FALSE(rpc->error);
+
+    rpc->handleError(&header, std::move(message));
+
+    EXPECT_TRUE(rpc->error);
+}
+
+TEST_F(RooPCImplTest, handleTimeout)
+{
+    Proto::RooId rooId(0, 0);
+    Proto::BranchId rootId(rooId, 0);
+    Proto::RequestId requestId(rootId, 0);
+    rpc->tasks.insert({requestId.branchId, {false, requestId, 0xFEED, 3}});
+
+    EXPECT_FALSE(rpc->error);
+    EXPECT_FALSE(rpc->tasks.at(rootId).complete);
+    EXPECT_EQ(3, rpc->tasks.at(rootId).pingCount);
+
+    // Expect ping
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PingHeader))));
+    EXPECT_CALL(outMessage,
+                send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_TRUE(rpc->handleTimeout());
+
+    EXPECT_FALSE(rpc->error);
+    EXPECT_FALSE(rpc->tasks.at(rootId).complete);
+    EXPECT_EQ(4, rpc->tasks.at(rootId).pingCount);
+    EXPECT_EQ(1, rpc->pings.size());
+    EXPECT_EQ(&outMessage, rpc->pings.front().get());
+
+    // Expect timeout
+    EXPECT_CALL(outMessage, release());
+
+    EXPECT_FALSE(rpc->handleTimeout());
+
+    EXPECT_TRUE(rpc->error);
+    EXPECT_FALSE(rpc->tasks.at(rootId).complete);
+    EXPECT_EQ(4, rpc->tasks.at(rootId).pingCount);
+    EXPECT_EQ(0, rpc->pings.size());
+
+    // All complete
+    rpc->tasks.at(rootId).complete = true;
+
+    EXPECT_TRUE(rpc->handleTimeout());
+}
+
 TEST_F(RooPCImplTest, markManifestReceived_new)
 {
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
@@ -351,13 +523,13 @@ TEST_F(RooPCImplTest, markManifestReceived_new)
     rpc->markManifestReceived(branchId, lock);
 
     EXPECT_EQ(1, rpc->tasks.size());
-    EXPECT_TRUE(rpc->tasks.at(branchId));
+    EXPECT_TRUE(rpc->tasks.at(branchId).complete);
 }
 
 TEST_F(RooPCImplTest, markManifestReceived_tracked)
 {
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
-    rpc->tasks[branchId] = false;
+    rpc->tasks[branchId] = {false, {}, {}, 0};
     rpc->manifestsOutstanding = 1;
     EXPECT_EQ(1, rpc->tasks.size());
 
@@ -365,14 +537,14 @@ TEST_F(RooPCImplTest, markManifestReceived_tracked)
     rpc->markManifestReceived(branchId, lock);
 
     EXPECT_EQ(1, rpc->tasks.size());
-    EXPECT_TRUE(rpc->tasks.at(branchId));
+    EXPECT_TRUE(rpc->tasks.at(branchId).complete);
     EXPECT_EQ(0, rpc->manifestsOutstanding);
 }
 
 TEST_F(RooPCImplTest, markManifestReceived_duplicate)
 {
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
-    rpc->tasks[branchId] = true;
+    rpc->tasks[branchId] = {true, {}, {}, 0};
 
     VectorHandler handler;
     Debug::setLogHandler(std::ref(handler));
@@ -389,25 +561,32 @@ TEST_F(RooPCImplTest, markManifestReceived_duplicate)
     Debug::setLogHandler(std::function<void(Debug::DebugMessage)>());
 
     EXPECT_EQ(1, rpc->tasks.size());
-    EXPECT_TRUE(rpc->tasks.at(branchId));
+    EXPECT_TRUE(rpc->tasks.at(branchId).complete);
     EXPECT_EQ(0, rpc->manifestsOutstanding);
 }
 
 TEST_F(RooPCImplTest, processManifest)
 {
     Proto::BranchId branchId(Proto::TaskId(1, 1), 1);
+    Proto::RequestId requestId(branchId, 42);
     Proto::TaskId taskId(2, 2);
     Proto::Manifest manifest;
-    manifest.branchId = branchId;
+    manifest.requestId = requestId;
     manifest.taskId = taskId;
     manifest.requestCount = 2;
     manifest.responseCount = 2;
 
-    rpc->tasks[Proto::BranchId(taskId, 0)] = true;
+    rpc->tasks[Proto::BranchId(taskId, 0)] = {true, {}, {}, 0};
     rpc->expectedResponses[Proto::ResponseId(taskId, 0)] = true;
 
     EXPECT_EQ(1, rpc->tasks.size());
     EXPECT_EQ(1, rpc->expectedResponses.size());
+
+    EXPECT_CALL(transport, getDriver());
+    EXPECT_CALL(driver,
+                getAddress(TypedEq<const Homa::Driver::WireFormatAddress*>(
+                    &manifest.serverAddress)))
+        .WillOnce(Return(0xFEED));
 
     SpinLock::Lock lock(rpc->mutex);
     rpc->processManifest(&manifest, lock);
@@ -415,11 +594,19 @@ TEST_F(RooPCImplTest, processManifest)
     EXPECT_EQ(1, rpc->manifestsOutstanding);
     EXPECT_EQ(1, rpc->responsesOutstanding);
 
+    // Check tasks
     EXPECT_EQ(3, rpc->tasks.size());
-    EXPECT_TRUE(rpc->tasks.at(Proto::BranchId(taskId, 0)));
-    EXPECT_FALSE(rpc->tasks.at(Proto::BranchId(taskId, 1)));
-    EXPECT_TRUE(rpc->tasks.at(branchId));
+    EXPECT_TRUE(rpc->tasks.at(Proto::BranchId(taskId, 0)).complete);
 
+    EXPECT_FALSE(rpc->tasks.at(Proto::BranchId(taskId, 1)).complete);
+    EXPECT_EQ(requestId,
+              rpc->tasks.at(Proto::BranchId(taskId, 1)).pingRequestId);
+    EXPECT_EQ(0xFEED, rpc->tasks.at(Proto::BranchId(taskId, 1)).pingAddress);
+    EXPECT_EQ(0, rpc->tasks.at(Proto::BranchId(taskId, 1)).pingCount);
+
+    EXPECT_TRUE(rpc->tasks.at(branchId).complete);
+
+    // Check response
     EXPECT_EQ(2, rpc->expectedResponses.size());
     EXPECT_TRUE(rpc->expectedResponses.at(Proto::ResponseId(taskId, 0)));
     EXPECT_FALSE(rpc->expectedResponses.at(Proto::ResponseId(taskId, 1)));
