@@ -160,20 +160,17 @@ ServerTaskImpl::poll()
 {
     // Keep track of time spent doing active processing versus idle.
     Perf::Timer timer;
-    timer.split();
-    uint64_t activeTime = 0;
-    uint64_t idleTime = 0;
 
     bool isInProgress = true;
 
     if (request->dropped()) {
         // Nothing left to do
         isInProgress = false;
-        activeTime += timer.split();
+        Perf::counters.active_cycles.add(timer.split());
     } else if (pendingMessages.empty()) {
         // No more pending messages.
         isInProgress = false;
-        activeTime += timer.split();
+        Perf::counters.active_cycles.add(timer.split());
     } else {
         // Check for any remaining pending messages
         auto it = pendingMessages.begin();
@@ -182,7 +179,7 @@ ServerTaskImpl::poll()
             if (status == Homa::OutMessage::Status::SENT) {
                 // Remove and keep checking for other pendingRequests
                 it = pendingMessages.erase(it);
-                activeTime += timer.split();
+                Perf::counters.active_cycles.add(timer.split());
             } else if (status == Homa::OutMessage::Status::FAILED) {
                 // Send Error notification to Client
                 Homa::unique_ptr<Homa::OutMessage> message =
@@ -194,18 +191,15 @@ ServerTaskImpl::poll()
                                   Homa::OutMessage::NO_KEEP_ALIVE);
                 // Failed, no need to keep checking
                 isInProgress = false;
-                activeTime += timer.split();
+                Perf::counters.active_cycles.add(timer.split());
                 break;
             } else {
                 ++it;
-                idleTime += timer.split();
+                Perf::counters.idle_cycles.add(timer.split());
             }
         }
-        idleTime += timer.split();
+        Perf::counters.idle_cycles.add(timer.split());
     }
-
-    Perf::counters.active_cycles.add(activeTime);
-    Perf::counters.idle_cycles.add(idleTime);
 
     return isInProgress;
 }

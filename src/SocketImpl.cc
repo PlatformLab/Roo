@@ -132,9 +132,6 @@ SocketImpl::processIncomingMessages()
 {
     // Keep track of time spent doing active processing versus idle.
     Perf::Timer activityTimer;
-    activityTimer.split();
-    uint64_t activeTime = 0;
-    uint64_t idleTime = 0;
 
     // Process incoming messages
     for (Homa::unique_ptr<Homa::InMessage> message = transport->receive();
@@ -213,12 +210,9 @@ SocketImpl::processIncomingMessages()
         } else {
             WARNING("Unexpected protocol message received.");
         }
-        activeTime += activityTimer.split();
+        Perf::counters.active_cycles.add(activityTimer.split());
     }
-    idleTime += activityTimer.split();
-
-    Perf::counters.active_cycles.add(activeTime);
-    Perf::counters.idle_cycles.add(idleTime);
+    Perf::counters.idle_cycles.add(activityTimer.split());
 }
 
 /**
@@ -230,15 +224,12 @@ SocketImpl::checkDetachedTasks()
 {
     // Keep track of time spent doing active processing versus idle.
     Perf::Timer activityTimer;
-    activityTimer.split();
-    uint64_t activeTime = 0;
-    uint64_t idleTime = 0;
 
     SpinLock::Lock lock_socket(mutex);
     auto it = detachedTasks.begin();
     while (it != detachedTasks.end()) {
         ServerTaskImpl* task = *it;
-        idleTime += activityTimer.split();
+        Perf::counters.idle_cycles.add(activityTimer.split());
         bool not_done = task->poll();
         activityTimer.split();
         if (not_done) {
@@ -248,13 +239,10 @@ SocketImpl::checkDetachedTasks()
             it = detachedTasks.erase(it);
             uint64_t timeoutTime = Cycles::rdtsc() + TASK_TIMEOUT_CYCLES;
             taskTimeouts.push_back({timeoutTime, task});
-            activeTime += activityTimer.split();
+            Perf::counters.active_cycles.add(activityTimer.split());
         }
     }
-    idleTime += activityTimer.split();
-
-    Perf::counters.active_cycles.add(activeTime);
-    Perf::counters.idle_cycles.add(idleTime);
+    Perf::counters.idle_cycles.add(activityTimer.split());
 }
 
 /**
@@ -265,9 +253,6 @@ SocketImpl::checkClientTimeouts()
 {
     // Keep track of time spent doing active processing versus idle.
     Perf::Timer activityTimer;
-    activityTimer.split();
-    uint64_t activeTime = 0;
-    uint64_t idleTime = 0;
 
     SpinLock::Lock lock_socket(mutex);
     uint64_t now = Cycles::rdtsc();
@@ -288,13 +273,10 @@ SocketImpl::checkClientTimeouts()
                     rpcTimeouts.push_back({timeoutTime, rooId});
                 }
             }
-            activeTime += activityTimer.split();
+            Perf::counters.active_cycles.add(activityTimer.split());
         }
     }
-    idleTime += activityTimer.split();
-
-    Perf::counters.active_cycles.add(activeTime);
-    Perf::counters.idle_cycles.add(idleTime);
+    Perf::counters.idle_cycles.add(activityTimer.split());
 }
 
 /**
@@ -305,9 +287,6 @@ SocketImpl::checkTaskTimeouts()
 {
     // Keep track of time spent doing active processing versus idle.
     Perf::Timer activityTimer;
-    activityTimer.split();
-    uint64_t activeTime = 0;
-    uint64_t idleTime = 0;
 
     SpinLock::Lock lock_socket(mutex);
     uint64_t now = Cycles::rdtsc();
@@ -326,13 +305,10 @@ SocketImpl::checkTaskTimeouts()
                 tasks.erase(task->getRequestId());
                 delete task;
             }
-            activeTime += activityTimer.split();
+            Perf::counters.active_cycles.add(activityTimer.split());
         }
     }
-    idleTime += activityTimer.split();
-
-    Perf::counters.active_cycles.add(activeTime);
-    Perf::counters.idle_cycles.add(idleTime);
+    Perf::counters.idle_cycles.add(activityTimer.split());
 }
 
 /**

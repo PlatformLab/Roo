@@ -144,10 +144,10 @@ extern thread_local ThreadCounters counters;
 class Timer {
   public:
     /**
-     * Construct a new uninitialized Timer.
+     * Construct a new Timer.
      */
     Timer()
-        : split_tsc(0)
+        : split_tsc(PerfUtils::Cycles::rdtsc())
     {}
 
     /**
