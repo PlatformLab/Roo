@@ -192,8 +192,6 @@ ServerTaskImpl::poll()
                 message->send(replyAddress,
                               Homa::OutMessage::NO_RETRY |
                                   Homa::OutMessage::NO_KEEP_ALIVE);
-                pendingMessages.push_back(message.get());
-                outboundMessages.push_back(std::move(message));
                 // Failed, no need to keep checking
                 isInProgress = false;
                 activeTime += timer.split();
@@ -230,9 +228,6 @@ ServerTaskImpl::handlePing(Proto::PingHeader* header,
     SpinLock::Lock lock(pingInfo.mutex);
     pingInfo.pingCount++;
 
-    // Clear last set of control messages.
-    pingInfo.controlMessages.clear();
-
     // Forward Pings
     for (auto& it : pingInfo.requests) {
         Homa::unique_ptr<Homa::OutMessage> ping = socket->transport->alloc();
@@ -240,7 +235,6 @@ ServerTaskImpl::handlePing(Proto::PingHeader* header,
         ping->append(&pingHeader, sizeof(Proto::PingHeader));
         ping->send(it.destination, Homa::OutMessage::NO_RETRY |
                                        Homa::OutMessage::NO_KEEP_ALIVE);
-        pingInfo.controlMessages.push_back(std::move(ping));
     }
 
     // Reply with Pong
@@ -268,7 +262,6 @@ ServerTaskImpl::handlePing(Proto::PingHeader* header,
     pong->append(&pongHeader, sizeof(Proto::PongHeader));
     pong->send(replyAddress,
                Homa::OutMessage::NO_RETRY | Homa::OutMessage::NO_KEEP_ALIVE);
-    pingInfo.controlMessages.push_back(std::move(pong));
 }
 
 /**

@@ -249,10 +249,9 @@ TEST_F(ServerTaskImplTest, poll_failed)
     EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
                                  Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
 
     EXPECT_FALSE(task->poll());
-
-    EXPECT_CALL(outMessage, release());
 }
 
 ACTION_P(SaveBlob, pointer)
@@ -287,6 +286,7 @@ TEST_F(ServerTaskImplTest, handlePing_basic)
     EXPECT_CALL(outMessage,
                 send(Eq(0xABCD), Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
 
     // Expect getLocalAddress
     EXPECT_CALL(transport, getDriver()).Times(2);
@@ -303,6 +303,7 @@ TEST_F(ServerTaskImplTest, handlePing_basic)
     EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
                                  Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
 
     EXPECT_CALL(inMessage, release());
 
@@ -316,8 +317,6 @@ TEST_F(ServerTaskImplTest, handlePing_basic)
     EXPECT_EQ(task->taskId, pong.manifest.taskId);
     EXPECT_EQ(1, pong.manifest.requestCount);
     EXPECT_EQ(8, pong.manifest.responseCount);
-
-    EXPECT_CALL(outMessage, release()).Times(2);
 }
 
 TEST_F(ServerTaskImplTest, handlePing_detached_single_response)
@@ -349,6 +348,7 @@ TEST_F(ServerTaskImplTest, handlePing_detached_single_response)
     EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
                                  Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
 
     EXPECT_CALL(inMessage, release());
 
@@ -360,8 +360,6 @@ TEST_F(ServerTaskImplTest, handlePing_detached_single_response)
     EXPECT_EQ(task->taskId, pong.manifest.taskId);
     EXPECT_EQ(0, pong.manifest.requestCount);
     EXPECT_EQ(1, pong.manifest.responseCount);
-
-    EXPECT_CALL(outMessage, release()).Times(1);
 }
 
 TEST_F(ServerTaskImplTest, handlePing_detached_single_delegate)
@@ -393,6 +391,7 @@ TEST_F(ServerTaskImplTest, handlePing_detached_single_delegate)
     EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
                                  Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
 
     EXPECT_CALL(inMessage, release());
 
@@ -402,8 +401,6 @@ TEST_F(ServerTaskImplTest, handlePing_detached_single_delegate)
     EXPECT_FALSE(pong.branchComplete);
     EXPECT_EQ(task->requestId, pong.manifest.requestId);
     EXPECT_EQ(task->taskId, pong.manifest.taskId);
-
-    EXPECT_CALL(outMessage, release()).Times(1);
 }
 
 TEST_F(ServerTaskImplTest, handlePing_in_progress)
@@ -435,6 +432,7 @@ TEST_F(ServerTaskImplTest, handlePing_in_progress)
     EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
                                  Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
 
     EXPECT_CALL(inMessage, release());
 
@@ -442,8 +440,6 @@ TEST_F(ServerTaskImplTest, handlePing_in_progress)
 
     EXPECT_EQ(task->rooId, pong.rooId);
     EXPECT_FALSE(pong.branchComplete);
-
-    EXPECT_CALL(outMessage, release()).Times(1);
 }
 
 TEST_F(ServerTaskImplTest, handleTimeout)

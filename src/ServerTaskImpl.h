@@ -118,9 +118,6 @@ class ServerTaskImpl : public ServerTask {
         /// Requests being tracked.
         std::deque<RequestInfo> requests;
 
-        /// Last set of sent ping and pong messages.
-        std::deque<Homa::unique_ptr<Homa::OutMessage>> controlMessages;
-
         /// Number of pings received since the last timeout.
         uint pingCount;
     } pingInfo;
