@@ -19,7 +19,7 @@
 #include <Homa/Homa.h>
 #include <Roo/Roo.h>
 
-#include <deque>
+#include <list>
 
 #include "Proto.h"
 #include "SpinLock.h"
@@ -96,10 +96,10 @@ class ServerTaskImpl : public ServerTask {
 
     /// Messages (include responses, delegated requests, and manifest messages),
     //. that have been sent by this task.
-    std::deque<Homa::unique_ptr<Homa::OutMessage>> outboundMessages;
+    std::list<Homa::unique_ptr<Homa::OutMessage>> outboundMessages;
 
     /// Messages that have been sent by this task but have not yet completed.
-    std::deque<Homa::OutMessage*> pendingMessages;
+    std::list<Homa::OutMessage*> pendingMessages;
 
     /// Hold information used to handle pings and timeouts.
     struct {
@@ -116,7 +116,7 @@ class ServerTaskImpl : public ServerTask {
         SpinLock mutex;
 
         /// Requests being tracked.
-        std::deque<RequestInfo> requests;
+        std::list<RequestInfo> requests;
 
         /// Number of pings received since the last timeout.
         uint pingCount;
