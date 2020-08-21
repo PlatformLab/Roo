@@ -13,6 +13,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include <PerfUtils/Cycles.h>
 #include <Roo/Debug.h>
 #include <gtest/gtest.h>
 
@@ -418,10 +419,10 @@ TEST_F(SocketImplTest, checkClientTimeouts)
         rpc[i] = new RooPCImpl(socket, rooId[i]);
     }
 
-    std::chrono::steady_clock::time_point past =
-        std::chrono::steady_clock::now() - std::chrono::hours{24};
-    std::chrono::steady_clock::time_point future =
-        std::chrono::steady_clock::now() + std::chrono::hours{24};
+    uint64_t past = PerfUtils::Cycles::rdtsc() -
+                    PerfUtils::Cycles::fromSeconds(24 * 60 * 60);
+    uint64_t future = PerfUtils::Cycles::rdtsc() +
+                      PerfUtils::Cycles::fromSeconds(24 * 60 * 60);
 
     // [0] Expired, Reschedule.
     socket->rpcs.insert({rooId[0], rpc[0]});
@@ -468,10 +469,10 @@ TEST_F(SocketImplTest, checkTaskTimeouts)
         socket->tasks.insert({task[i]->getRequestId(), task[i]});
     }
 
-    std::chrono::steady_clock::time_point past =
-        std::chrono::steady_clock::now() - std::chrono::hours{24};
-    std::chrono::steady_clock::time_point future =
-        std::chrono::steady_clock::now() + std::chrono::hours{24};
+    uint64_t past = PerfUtils::Cycles::rdtsc() -
+                    PerfUtils::Cycles::fromSeconds(24 * 60 * 60);
+    uint64_t future = PerfUtils::Cycles::rdtsc() +
+                      PerfUtils::Cycles::fromSeconds(24 * 60 * 60);
 
     // [0] Expired, reschedule.
     task[0]->pingInfo.pingCount = 9001;

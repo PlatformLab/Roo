@@ -63,7 +63,7 @@ class SocketImpl : public Socket {
     template <typename T>
     struct Timeout {
         /// Time when the associated object should time out.
-        std::chrono::steady_clock::time_point expirationTime;
+        uint64_t expirationTime;
         /// The object associated with this timeout.
         T object;
     };
@@ -80,6 +80,12 @@ class SocketImpl : public Socket {
 
     /// Used to generate socket unique identifiers.
     std::atomic<uint64_t> nextSequenceNumber;
+
+    /// Cycles to wait before pinging to check on requests.
+    uint64_t const WORRY_TIMEOUT_CYCLES;
+
+    /// Cycles of inactive before garbage collecting a task.
+    uint64_t const TASK_TIMEOUT_CYCLES;
 
     // Monitor style mutex.
     SpinLock mutex;

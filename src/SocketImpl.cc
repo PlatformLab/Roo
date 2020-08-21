@@ -24,12 +24,14 @@
 
 namespace Roo {
 
+using PerfUtils::Cycles;
+
 // Basic timeout unit.
-const std::chrono::microseconds BASE_TIMEOUT_US{2000};
+const uint64_t BASE_TIMEOUT_US{2000};
 /// Microseconds to wait before pinging to check on requests.
-const std::chrono::microseconds WORRY_TIMEOUT_US{BASE_TIMEOUT_US};
-/// Microseconds to wait before performing retires on inbound messages.
-const std::chrono::microseconds TASK_TIMEOUT_US{3 * BASE_TIMEOUT_US};
+const uint64_t WORRY_TIMEOUT_US{BASE_TIMEOUT_US};
+/// Microseconds of inactive before garbage collecting a task.
+const uint64_t TASK_TIMEOUT_US{3 * BASE_TIMEOUT_US};
 
 /**
  * Construct a SocketImpl.
@@ -41,6 +43,8 @@ SocketImpl::SocketImpl(Homa::Transport* transport)
     : transport(transport)
     , socketId(transport->getId())
     , nextSequenceNumber(1)
+    , WORRY_TIMEOUT_CYCLES(Cycles::fromMicroseconds(WORRY_TIMEOUT_US))
+    , TASK_TIMEOUT_CYCLES(Cycles::fromMicroseconds(TASK_TIMEOUT_US))
     , mutex()
     , rpcs()
     , tasks()
@@ -64,8 +68,7 @@ SocketImpl::allocRooPC()
     Proto::RooId rooId = allocTaskId();
     RooPCImpl* rpc = new RooPCImpl(this, rooId);
     rpcs.insert({rooId, rpc});
-    std::chrono::steady_clock::time_point timeoutTime =
-        std::chrono::steady_clock::now() + WORRY_TIMEOUT_US;
+    uint64_t timeoutTime = Cycles::rdtsc() + WORRY_TIMEOUT_CYCLES;
     rpcTimeouts.push_back({timeoutTime, rooId});
     return Roo::unique_ptr<RooPC>(rpc);
 }
@@ -243,8 +246,7 @@ SocketImpl::checkDetachedTasks()
         } else {
             // ServerTask is done polling
             it = detachedTasks.erase(it);
-            std::chrono::steady_clock::time_point timeoutTime =
-                std::chrono::steady_clock::now() + TASK_TIMEOUT_US;
+            uint64_t timeoutTime = Cycles::rdtsc() + TASK_TIMEOUT_CYCLES;
             taskTimeouts.push_back({timeoutTime, task});
             activeTime += activityTimer.split();
         }
@@ -268,8 +270,7 @@ SocketImpl::checkClientTimeouts()
     uint64_t idleTime = 0;
 
     SpinLock::Lock lock_socket(mutex);
-    std::chrono::steady_clock::time_point now =
-        std::chrono::steady_clock::now();
+    uint64_t now = Cycles::rdtsc();
     auto it = rpcTimeouts.begin();
     while (it != rpcTimeouts.end()) {
         if (now < it->expirationTime) {
@@ -282,8 +283,8 @@ SocketImpl::checkClientTimeouts()
                 RooPCImpl* rpc = rpcHandle->second;
                 if (rpc->handleTimeout()) {
                     // Timeout handled and reset
-                    std::chrono::steady_clock::time_point timeoutTime =
-                        std::chrono::steady_clock::now() + WORRY_TIMEOUT_US;
+                    uint64_t timeoutTime =
+                        Cycles::rdtsc() + WORRY_TIMEOUT_CYCLES;
                     rpcTimeouts.push_back({timeoutTime, rooId});
                 }
             }
@@ -309,8 +310,7 @@ SocketImpl::checkTaskTimeouts()
     uint64_t idleTime = 0;
 
     SpinLock::Lock lock_socket(mutex);
-    std::chrono::steady_clock::time_point now =
-        std::chrono::steady_clock::now();
+    uint64_t now = Cycles::rdtsc();
     auto it = taskTimeouts.begin();
     while (it != taskTimeouts.end()) {
         if (now < it->expirationTime) {
@@ -320,8 +320,7 @@ SocketImpl::checkTaskTimeouts()
             it = taskTimeouts.erase(it);
             if (task->handleTimeout()) {
                 // Timeout handled and reset
-                std::chrono::steady_clock::time_point timeoutTime =
-                    std::chrono::steady_clock::now() + TASK_TIMEOUT_US;
+                uint64_t timeoutTime = Cycles::rdtsc() + TASK_TIMEOUT_CYCLES;
                 taskTimeouts.push_back({timeoutTime, task});
             } else {
                 tasks.erase(task->getRequestId());
