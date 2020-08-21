@@ -101,10 +101,13 @@ SocketImpl::poll()
 {
     // Let the transport make incremental progress.
     transport->poll();
+
+    Perf::Timer timer;
     processIncomingMessages();
     checkDetachedTasks();
     checkClientTimeouts();
     checkTaskTimeouts();
+    Perf::counters.total_cycles.add(timer.split());
 }
 
 /**
@@ -217,7 +220,6 @@ SocketImpl::processIncomingMessages()
         }
         Perf::counters.active_cycles.add(activityTimer.split());
     }
-    Perf::counters.idle_cycles.add(activityTimer.split());
 }
 
 /**
@@ -234,7 +236,6 @@ SocketImpl::checkDetachedTasks()
     auto it = detachedTasks.begin();
     while (it != detachedTasks.end()) {
         ServerTaskImpl* task = *it;
-        Perf::counters.idle_cycles.add(activityTimer.split());
         bool not_done = task->poll();
         activityTimer.split();
         if (not_done) {
@@ -249,7 +250,6 @@ SocketImpl::checkDetachedTasks()
             Perf::counters.active_cycles.add(activityTimer.split());
         }
     }
-    Perf::counters.idle_cycles.add(activityTimer.split());
 }
 
 /**
@@ -261,11 +261,11 @@ SocketImpl::checkClientTimeouts()
     // Keep track of time spent doing active processing versus idle.
     Perf::Timer activityTimer;
 
-    uint64_t now = Cycles::rdtsc();
+    // Avoid calling rdtsc() again and use the activityTimer time instead.
+    uint64_t now = activityTimer.read();
 
     // Fast path check if there are any timeouts about to expire.
     if (now < nextRpcTimeout.load(std::memory_order_relaxed)) {
-        Perf::counters.idle_cycles.add(activityTimer.split());
         return;
     }
 
@@ -297,8 +297,6 @@ SocketImpl::checkClientTimeouts()
         nextRpcTimeout.store(rpcTimeouts.front().expirationTime,
                              std::memory_order_relaxed);
     }
-
-    Perf::counters.idle_cycles.add(activityTimer.split());
 }
 
 /**
@@ -310,11 +308,11 @@ SocketImpl::checkTaskTimeouts()
     // Keep track of time spent doing active processing versus idle.
     Perf::Timer activityTimer;
 
-    uint64_t now = Cycles::rdtsc();
+    // Avoid calling rdtsc() again and use the activityTimer time instead.
+    uint64_t now = activityTimer.read();
 
     // Fast path check if there are any timeouts about to expire.
     if (now < nextTaskTimeout.load(std::memory_order_relaxed)) {
-        Perf::counters.idle_cycles.add(activityTimer.split());
         return;
     }
 
@@ -344,8 +342,6 @@ SocketImpl::checkTaskTimeouts()
         nextTaskTimeout.store(taskTimeouts.front().expirationTime,
                               std::memory_order_relaxed);
     }
-
-    Perf::counters.idle_cycles.add(activityTimer.split());
 }
 
 /**

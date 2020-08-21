@@ -195,10 +195,8 @@ ServerTaskImpl::poll()
                 break;
             } else {
                 ++it;
-                Perf::counters.idle_cycles.add(timer.split());
             }
         }
-        Perf::counters.idle_cycles.add(timer.split());
     }
 
     return isInProgress;
