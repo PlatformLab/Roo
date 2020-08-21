@@ -96,6 +96,10 @@ class SocketImpl : public Socket {
     /// RooPC ids in increasing timeout order.
     std::list<Timeout<Proto::RooId>> rpcTimeouts;
 
+    // The cycle time when the next rpc timeout will elapse (e.g. the expiration
+    // time of the first timeout in rpcTimeouts).
+    std::atomic<uint64_t> nextRpcTimeout;
+
     /// Tracks the set of live ServerTask objects managed by this socket.
     std::unordered_map<Proto::RequestId, ServerTaskImpl*,
                        Proto::RequestId::Hasher>
@@ -113,6 +117,10 @@ class SocketImpl : public Socket {
     /// garbage collected after a timeout. ServerTask objects are held in
     /// timeout order.
     std::list<Timeout<ServerTaskImpl*>> taskTimeouts;
+
+    // The cycle time when the next task timeout will elapse (e.g. the
+    // expiration time of the first timeout in taskTimeouts).
+    std::atomic<uint64_t> nextTaskTimeout;
 };
 
 }  // namespace Roo

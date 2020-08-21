@@ -47,10 +47,13 @@ SocketImpl::SocketImpl(Homa::Transport* transport)
     , TASK_TIMEOUT_CYCLES(Cycles::fromMicroseconds(TASK_TIMEOUT_US))
     , mutex()
     , rpcs()
+    , rpcTimeouts()
+    , nextRpcTimeout(UINT64_MAX)
     , tasks()
     , pendingTasks()
     , detachedTasks()
     , taskTimeouts()
+    , nextTaskTimeout(UINT64_MAX)
 {}
 
 /**
@@ -70,6 +73,8 @@ SocketImpl::allocRooPC()
     rpcs.insert({rooId, rpc});
     uint64_t timeoutTime = Cycles::rdtsc() + WORRY_TIMEOUT_CYCLES;
     rpcTimeouts.push_back({timeoutTime, rooId});
+    nextRpcTimeout.store(rpcTimeouts.front().expirationTime,
+                         std::memory_order_relaxed);
     return Roo::unique_ptr<RooPC>(rpc);
 }
 
@@ -239,6 +244,8 @@ SocketImpl::checkDetachedTasks()
             it = detachedTasks.erase(it);
             uint64_t timeoutTime = Cycles::rdtsc() + TASK_TIMEOUT_CYCLES;
             taskTimeouts.push_back({timeoutTime, task});
+            nextTaskTimeout.store(taskTimeouts.front().expirationTime,
+                                  std::memory_order_relaxed);
             Perf::counters.active_cycles.add(activityTimer.split());
         }
     }
@@ -254,8 +261,15 @@ SocketImpl::checkClientTimeouts()
     // Keep track of time spent doing active processing versus idle.
     Perf::Timer activityTimer;
 
-    SpinLock::Lock lock_socket(mutex);
     uint64_t now = Cycles::rdtsc();
+
+    // Fast path check if there are any timeouts about to expire.
+    if (now < nextRpcTimeout.load(std::memory_order_relaxed)) {
+        Perf::counters.idle_cycles.add(activityTimer.split());
+        return;
+    }
+
+    SpinLock::Lock lock_socket(mutex);
     auto it = rpcTimeouts.begin();
     while (it != rpcTimeouts.end()) {
         if (now < it->expirationTime) {
@@ -276,6 +290,14 @@ SocketImpl::checkClientTimeouts()
             Perf::counters.active_cycles.add(activityTimer.split());
         }
     }
+
+    if (rpcTimeouts.empty()) {
+        nextRpcTimeout.store(UINT64_MAX, std::memory_order_relaxed);
+    } else {
+        nextRpcTimeout.store(rpcTimeouts.front().expirationTime,
+                             std::memory_order_relaxed);
+    }
+
     Perf::counters.idle_cycles.add(activityTimer.split());
 }
 
@@ -288,8 +310,15 @@ SocketImpl::checkTaskTimeouts()
     // Keep track of time spent doing active processing versus idle.
     Perf::Timer activityTimer;
 
-    SpinLock::Lock lock_socket(mutex);
     uint64_t now = Cycles::rdtsc();
+
+    // Fast path check if there are any timeouts about to expire.
+    if (now < nextTaskTimeout.load(std::memory_order_relaxed)) {
+        Perf::counters.idle_cycles.add(activityTimer.split());
+        return;
+    }
+
+    SpinLock::Lock lock_socket(mutex);
     auto it = taskTimeouts.begin();
     while (it != taskTimeouts.end()) {
         if (now < it->expirationTime) {
@@ -308,6 +337,14 @@ SocketImpl::checkTaskTimeouts()
             Perf::counters.active_cycles.add(activityTimer.split());
         }
     }
+
+    if (taskTimeouts.empty()) {
+        nextTaskTimeout.store(UINT64_MAX, std::memory_order_relaxed);
+    } else {
+        nextTaskTimeout.store(taskTimeouts.front().expirationTime,
+                              std::memory_order_relaxed);
+    }
+
     Perf::counters.idle_cycles.add(activityTimer.split());
 }
 

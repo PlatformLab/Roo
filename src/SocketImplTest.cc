@@ -439,6 +439,8 @@ TEST_F(SocketImplTest, checkClientTimeouts)
     // [3] Not expired.
     socket->rpcTimeouts.push_back({future, rooId[3]});
 
+    socket->nextRpcTimeout = socket->rpcTimeouts.front().expirationTime;
+
     EXPECT_EQ(4, socket->rpcTimeouts.size());
 
     socket->checkClientTimeouts();
@@ -446,6 +448,7 @@ TEST_F(SocketImplTest, checkClientTimeouts)
     EXPECT_EQ(2, socket->rpcTimeouts.size());
     EXPECT_EQ(rooId[3], socket->rpcTimeouts.front().object);
     EXPECT_EQ(rooId[0], socket->rpcTimeouts.back().object);
+    EXPECT_EQ(future, socket->nextRpcTimeout);
 }
 
 TEST_F(SocketImplTest, checkTaskTimeouts)
@@ -484,6 +487,8 @@ TEST_F(SocketImplTest, checkTaskTimeouts)
     // [2] Not expired.
     socket->taskTimeouts.push_back({future, task[2]});
 
+    socket->nextTaskTimeout = socket->taskTimeouts.front().expirationTime;
+
     EXPECT_EQ(3, socket->taskTimeouts.size());
     EXPECT_EQ(3, socket->tasks.size());
 
@@ -495,6 +500,7 @@ TEST_F(SocketImplTest, checkTaskTimeouts)
     EXPECT_EQ(task[0], socket->taskTimeouts.back().object);
     EXPECT_EQ(2, socket->tasks.size());
     EXPECT_EQ(0, socket->tasks.count(requestId[1]));
+    EXPECT_EQ(future, socket->nextTaskTimeout);
 }
 
 TEST_F(SocketImplTest, allocTaskId)
