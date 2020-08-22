@@ -50,6 +50,7 @@ void
 RooPCImpl::send(Homa::Driver::Address destination, const void* request,
                 std::size_t length)
 {
+    Perf::Timer timer;
     SpinLock::Lock lock(mutex);
     Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
     Homa::Driver::Address replyAddress =
@@ -71,6 +72,7 @@ RooPCImpl::send(Homa::Driver::Address destination, const void* request,
     message->send(destination,
                   Homa::OutMessage::NO_RETRY | Homa::OutMessage::NO_KEEP_ALIVE);
     pendingRequests.push_back(std::move(message));
+    Perf::counters.client_api_cycles.add(timer.split());
 }
 
 /**
@@ -79,11 +81,13 @@ RooPCImpl::send(Homa::Driver::Address destination, const void* request,
 Homa::InMessage*
 RooPCImpl::receive()
 {
+    Perf::Timer timer;
     SpinLock::Lock lock(mutex);
     Homa::InMessage* response = nullptr;
     if (!responseQueue.empty()) {
         response = responseQueue.front();
         responseQueue.pop_front();
+        Perf::counters.client_api_cycles.add(timer.split());
     }
     return response;
 }
@@ -131,9 +135,11 @@ RooPCImpl::wait()
 void
 RooPCImpl::destroy()
 {
+    Perf::Timer timer;
     // Don't actually free the object yet.  Return contol to the managing
     // socket so it can do some clean up.
     socket->dropRooPC(this);
+    Perf::counters.client_api_cycles.add(timer.split());
 }
 
 /**

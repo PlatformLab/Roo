@@ -67,6 +67,7 @@ SocketImpl::~SocketImpl() {}
 Roo::unique_ptr<RooPC>
 SocketImpl::allocRooPC()
 {
+    Perf::Timer timer;
     SpinLock::Lock lock_socket(mutex);
     Proto::RooId rooId = allocTaskId();
     RooPCImpl* rpc = new RooPCImpl(this, rooId);
@@ -75,6 +76,7 @@ SocketImpl::allocRooPC()
     rpcTimeouts.push_back({timeoutTime, rooId});
     nextRpcTimeout.store(rpcTimeouts.front().expirationTime,
                          std::memory_order_relaxed);
+    Perf::counters.client_api_cycles.add(timer.split());
     return Roo::unique_ptr<RooPC>(rpc);
 }
 
@@ -84,11 +86,13 @@ SocketImpl::allocRooPC()
 Roo::unique_ptr<ServerTask>
 SocketImpl::receive()
 {
+    Perf::Timer timer;
     SpinLock::Lock lock_socket(mutex);
     Roo::unique_ptr<ServerTask> task;
     if (!pendingTasks.empty()) {
         task = Roo::unique_ptr<ServerTask>(pendingTasks.front());
         pendingTasks.pop_front();
+        Perf::counters.server_api_cycles.add(timer.split());
     }
     return task;
 }
@@ -107,7 +111,7 @@ SocketImpl::poll()
     checkDetachedTasks();
     checkClientTimeouts();
     checkTaskTimeouts();
-    Perf::counters.total_cycles.add(timer.split());
+    Perf::counters.poll_total_cycles.add(timer.split());
 }
 
 /**
@@ -218,7 +222,7 @@ SocketImpl::processIncomingMessages()
         } else {
             WARNING("Unexpected protocol message received.");
         }
-        Perf::counters.active_cycles.add(activityTimer.split());
+        Perf::counters.poll_active_cycles.add(activityTimer.split());
     }
 }
 
@@ -247,7 +251,7 @@ SocketImpl::checkDetachedTasks()
             taskTimeouts.push_back({timeoutTime, task});
             nextTaskTimeout.store(taskTimeouts.front().expirationTime,
                                   std::memory_order_relaxed);
-            Perf::counters.active_cycles.add(activityTimer.split());
+            Perf::counters.poll_active_cycles.add(activityTimer.split());
         }
     }
 }
@@ -287,7 +291,7 @@ SocketImpl::checkClientTimeouts()
                     rpcTimeouts.push_back({timeoutTime, rooId});
                 }
             }
-            Perf::counters.active_cycles.add(activityTimer.split());
+            Perf::counters.poll_active_cycles.add(activityTimer.split());
         }
     }
 
@@ -332,7 +336,7 @@ SocketImpl::checkTaskTimeouts()
                 tasks.erase(task->getRequestId());
                 delete task;
             }
-            Perf::counters.active_cycles.add(activityTimer.split());
+            Perf::counters.poll_active_cycles.add(activityTimer.split());
         }
     }
 

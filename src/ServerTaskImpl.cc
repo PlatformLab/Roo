@@ -81,6 +81,8 @@ ServerTaskImpl::getRequest()
 void
 ServerTaskImpl::reply(const void* response, std::size_t length)
 {
+    Perf::Timer timer;
+
     // The ServerTask always buffers that last outbound message so that any
     // necessary manifest information can be piggy-back on the last message.
     // The response message provided in this call will be sent when the server
@@ -106,6 +108,7 @@ ServerTaskImpl::reply(const void* response, std::size_t length)
     }
     bufferedMessageAddress = replyAddress;
     bufferedMessage = std::move(message);
+    Perf::counters.server_api_cycles.add(timer.split());
 }
 
 /**
@@ -115,6 +118,8 @@ void
 ServerTaskImpl::delegate(Homa::Driver::Address destination, const void* request,
                          std::size_t length)
 {
+    Perf::Timer timer;
+
     // The ServerTask always buffers that last outbound message so that any
     // necessary manifest information can be piggy-back on the last message.
     // The request message provided in this call will be sent when the server
@@ -146,6 +151,7 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination, const void* request,
 
     SpinLock::Lock lock(pingInfo.mutex);
     pingInfo.requests.push_back({newRequestId, destination});
+    Perf::counters.server_api_cycles.add(timer.split());
 }
 
 /**
@@ -166,11 +172,11 @@ ServerTaskImpl::poll()
     if (request->dropped()) {
         // Nothing left to do
         isInProgress = false;
-        Perf::counters.active_cycles.add(timer.split());
+        Perf::counters.poll_active_cycles.add(timer.split());
     } else if (pendingMessages.empty()) {
         // No more pending messages.
         isInProgress = false;
-        Perf::counters.active_cycles.add(timer.split());
+        Perf::counters.poll_active_cycles.add(timer.split());
     } else {
         // Check for any remaining pending messages
         auto it = pendingMessages.begin();
@@ -179,7 +185,7 @@ ServerTaskImpl::poll()
             if (status == Homa::OutMessage::Status::SENT) {
                 // Remove and keep checking for other pendingRequests
                 it = pendingMessages.erase(it);
-                Perf::counters.active_cycles.add(timer.split());
+                Perf::counters.poll_active_cycles.add(timer.split());
             } else if (status == Homa::OutMessage::Status::FAILED) {
                 // Send Error notification to Client
                 Homa::unique_ptr<Homa::OutMessage> message =
@@ -191,7 +197,7 @@ ServerTaskImpl::poll()
                                   Homa::OutMessage::NO_KEEP_ALIVE);
                 // Failed, no need to keep checking
                 isInProgress = false;
-                Perf::counters.active_cycles.add(timer.split());
+                Perf::counters.poll_active_cycles.add(timer.split());
                 break;
             } else {
                 ++it;
@@ -281,6 +287,8 @@ ServerTaskImpl::handleTimeout()
 void
 ServerTaskImpl::destroy()
 {
+    Perf::Timer timer;
+
     if (responseCount + requestCount == 0) {
         // Task didn't generate any outbound messages; send Manifest message.
         Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
@@ -336,6 +344,7 @@ ServerTaskImpl::destroy()
     // make sure that any outgoing messages are competely sent.
     detached.store(true);
     socket->remandTask(this);
+    Perf::counters.server_api_cycles.add(timer.split());
 }
 
 /**

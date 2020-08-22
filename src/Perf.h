@@ -78,8 +78,10 @@ struct Counters {
      * Default constructor.
      */
     Counters()
-        : total_cycles(0)
-        , active_cycles(0)
+        : poll_total_cycles(0)
+        , poll_active_cycles(0)
+        , client_api_cycles(0)
+        , server_api_cycles(0)
         , tx_message_bytes(0)
         , rx_message_bytes(0)
     {}
@@ -94,8 +96,10 @@ struct Counters {
      */
     void add(const Counters* other)
     {
-        total_cycles.add(other->total_cycles);
-        active_cycles.add(other->active_cycles);
+        poll_total_cycles.add(other->poll_total_cycles);
+        poll_active_cycles.add(other->poll_active_cycles);
+        client_api_cycles.add(other->client_api_cycles);
+        server_api_cycles.add(other->server_api_cycles);
         tx_message_bytes.add(other->tx_message_bytes);
         rx_message_bytes.add(other->rx_message_bytes);
     }
@@ -105,17 +109,25 @@ struct Counters {
      */
     void dumpStats(Stats* stats)
     {
-        stats->active_cycles = active_cycles.get();
-        stats->idle_cycles = total_cycles.get() - active_cycles.get();
+        stats->active_cycles = poll_active_cycles.get() +
+                               client_api_cycles.get() +
+                               server_api_cycles.get();
+        stats->idle_cycles = poll_total_cycles.get() - poll_active_cycles.get();
         stats->tx_message_bytes = tx_message_bytes.get();
         stats->rx_message_bytes = rx_message_bytes.get();
     }
 
-    /// CPU time running Roo in cycles.
-    Stat<uint64_t> total_cycles;
+    /// CPU time running the poll() method in cycles.
+    Stat<uint64_t> poll_total_cycles;
 
-    /// CPU time actively processing RooPCs and ServerTask messages in cycles.
-    Stat<uint64_t> active_cycles;
+    /// CPU time performing useful work in the poll() method in cycles.
+    Stat<uint64_t> poll_active_cycles;
+
+    /// CPU time actively executing RooPC related API calls in cycles.
+    Stat<uint64_t> client_api_cycles;
+
+    /// CPU time actively executing ServerTask related API calls in cycles.
+    Stat<uint64_t> server_api_cycles;
 
     /// Number of application message bytes sent.
     Stat<uint64_t> tx_message_bytes;
