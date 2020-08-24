@@ -27,6 +27,9 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <string>
+
+#include "StringUtil.h"
 
 namespace Roo {
 namespace Proto {
@@ -66,6 +69,16 @@ struct TaskId {
     bool operator==(const TaskId& other) const
     {
         return ((socketId == other.socketId) && (sequence == other.sequence));
+    }
+
+    /**
+     * Return a string representation of the TaskId.
+     *
+     * Useful for logging.
+     */
+    std::string toString() const
+    {
+        return StringUtil::format("{%lX, %lu}", socketId, sequence);
     }
 
     /**
@@ -125,6 +138,17 @@ struct BranchId {
     }
 
     /**
+     * Return a string representation of the BranchId.
+     *
+     * Useful for logging.
+     */
+    std::string toString() const
+    {
+        return StringUtil::format("{%s, %u}", taskId.toString().c_str(),
+                                  sequence);
+    }
+
+    /**
      * This class computes a hash of an BranchId, so that Id can be used
      * as keys in unordered_maps.
      */
@@ -176,6 +200,17 @@ struct RequestId {
     }
 
     /**
+     * Return a string representation of the RequestId.
+     *
+     * Useful for logging.
+     */
+    std::string toString() const
+    {
+        return StringUtil::format("{%s, %u}", branchId.toString().c_str(),
+                                  sequence);
+    }
+
+    /**
      * This class computes a hash of an RequestId, so that Id can be used
      * as keys in unordered_maps.
      */
@@ -224,6 +259,17 @@ struct ResponseId {
     bool operator==(const ResponseId& other) const
     {
         return ((taskId == other.taskId) && (sequence == other.sequence));
+    }
+
+    /**
+     * Return a string representation of the ResponseId.
+     *
+     * Useful for logging.
+     */
+    std::string toString() const
+    {
+        return StringUtil::format("{%s, %u}", taskId.toString().c_str(),
+                                  sequence);
     }
 
     /**
