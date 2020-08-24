@@ -296,6 +296,7 @@ TEST_F(SocketImplTest, processIncomingMessages_Ping)
     EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))));
     EXPECT_CALL(outMessage, send(_, _));
 
+    EXPECT_CALL(outMessage, release());
     EXPECT_CALL(inMessage, release());
 
     socket->processIncomingMessages();
