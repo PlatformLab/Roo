@@ -476,6 +476,8 @@ TEST_F(RooPCImplTest, handleTimeout)
     Proto::BranchId rootId(rooId, 0);
     Proto::RequestId requestId(rootId, 0);
     rpc->tasks.insert({requestId.branchId, {false, requestId, 0xFEED, 3}});
+    rpc->tasks.insert({{rooId, 1}, {true, {}, {}, {}}});
+    rpc->manifestsOutstanding = 1;
 
     EXPECT_FALSE(rpc->error);
     EXPECT_FALSE(rpc->tasks.at(rootId).complete);
@@ -489,28 +491,36 @@ TEST_F(RooPCImplTest, handleTimeout)
     EXPECT_CALL(outMessage,
                 send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
     EXPECT_TRUE(rpc->handleTimeout());
 
     EXPECT_FALSE(rpc->error);
     EXPECT_FALSE(rpc->tasks.at(rootId).complete);
     EXPECT_EQ(4, rpc->tasks.at(rootId).pingCount);
-    EXPECT_EQ(1, rpc->pings.size());
-    EXPECT_EQ(&outMessage, rpc->pings.front().get());
 
     // Expect timeout
-    EXPECT_CALL(outMessage, release());
-
     EXPECT_FALSE(rpc->handleTimeout());
 
     EXPECT_TRUE(rpc->error);
     EXPECT_FALSE(rpc->tasks.at(rootId).complete);
     EXPECT_EQ(4, rpc->tasks.at(rootId).pingCount);
-    EXPECT_EQ(0, rpc->pings.size());
+
+    // Missing responses
+    rpc->tasks.at(rootId).complete = true;
+    rpc->manifestsOutstanding = 0;
+    rpc->responsesOutstanding = 1;
+    rpc->error = false;
+
+    EXPECT_FALSE(rpc->handleTimeout());
+    EXPECT_TRUE(rpc->error);
 
     // All complete
-    rpc->tasks.at(rootId).complete = true;
+    rpc->manifestsOutstanding = 0;
+    rpc->responsesOutstanding = 0;
+    rpc->error = false;
 
-    EXPECT_TRUE(rpc->handleTimeout());
+    EXPECT_FALSE(rpc->handleTimeout());
+    EXPECT_FALSE(rpc->error);
 }
 
 TEST_F(RooPCImplTest, markManifestReceived_new)

@@ -284,32 +284,42 @@ bool
 RooPCImpl::handleTimeout()
 {
     SpinLock::Lock lock(mutex);
-    pings.clear();
-    for (auto& it : tasks) {
-        TaskInfo* info = &it.second;
+    if (manifestsOutstanding > 0) {
+        // Ping tasks for which we don't have manifests.
+        for (auto& it : tasks) {
+            TaskInfo* info = &it.second;
 
-        // Check if task is still in progress.
-        if (info->complete) {
-            // nothing to do
-            continue;
+            // Check if task is still in progress.
+            if (info->complete) {
+                // nothing to do
+                continue;
+            }
+
+            // Check if task has timedout
+            if (info->pingCount > 3) {
+                error = true;
+                return false;
+            }
+
+            // Send a ping.
+            Homa::unique_ptr<Homa::OutMessage> ping =
+                socket->transport->alloc();
+            Proto::PingHeader pingHeader(info->pingRequestId);
+            ping->append(&pingHeader, sizeof(Proto::PingHeader));
+            ping->send(info->pingAddress, Homa::OutMessage::NO_RETRY |
+                                              Homa::OutMessage::NO_KEEP_ALIVE);
+            info->pingCount++;
         }
-
-        // Check if task has timedout
-        if (info->pingCount > 3) {
-            error = true;
-            return false;
-        }
-
-        // Send a ping.
-        Homa::unique_ptr<Homa::OutMessage> ping = socket->transport->alloc();
-        Proto::PingHeader pingHeader(info->pingRequestId);
-        ping->append(&pingHeader, sizeof(Proto::PingHeader));
-        ping->send(info->pingAddress, Homa::OutMessage::NO_RETRY |
-                                          Homa::OutMessage::NO_KEEP_ALIVE);
-        pings.push_back(std::move(ping));
-        info->pingCount++;
+        return true;
+    } else if (responsesOutstanding > 0) {
+        // All task are complete but the responses haven't come in yet.
+        // Consider the responses lost and generate an error.
+        error = true;
+        return false;
+    } else {
+        // All manifests and responses have been received.
+        return false;
     }
-    return true;
 }
 
 /**

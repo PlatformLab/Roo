@@ -427,11 +427,13 @@ TEST_F(SocketImplTest, checkClientTimeouts)
 
     // [0] Expired, Reschedule.
     socket->rpcs.insert({rooId[0], rpc[0]});
+    rpc[0]->manifestsOutstanding = 1;
     socket->rpcTimeouts.push_back({past, rooId[0]});
 
     // [1] Expired, No reschedule.
     socket->rpcs.insert({rooId[1], rpc[1]});
     rpc[1]->tasks.insert({{}, {false, {}, {}, 9001}});
+    rpc[1]->manifestsOutstanding = 1;
     socket->rpcTimeouts.push_back({past, rooId[1]});
 
     // [2] Expired, stale.

@@ -110,9 +110,6 @@ class RooPCImpl : public RooPC {
     /// All responses that have been received.
     std::deque<Homa::unique_ptr<Homa::InMessage> > responses;
 
-    /// Ping messages sent during the last timeout.
-    std::deque<Homa::unique_ptr<Homa::OutMessage> > pings;
-
     /// Tracks the tasks spawned from RooPC.
     std::unordered_map<Proto::BranchId, TaskInfo, Proto::BranchId::Hasher>
         tasks;
