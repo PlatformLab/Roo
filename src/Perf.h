@@ -109,9 +109,8 @@ struct Counters {
      */
     void dumpStats(Stats* stats)
     {
-        stats->active_cycles = poll_active_cycles.get() +
-                               client_api_cycles.get() +
-                               server_api_cycles.get();
+        stats->api_cycles = client_api_cycles.get() + server_api_cycles.get();
+        stats->active_cycles = poll_active_cycles.get();
         stats->idle_cycles = poll_total_cycles.get() - poll_active_cycles.get();
         stats->tx_message_bytes = tx_message_bytes.get();
         stats->rx_message_bytes = rx_message_bytes.get();

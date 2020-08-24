@@ -32,10 +32,13 @@ struct Stats {
     /// Conversion factor from cycles to seconds.
     double cycles_per_second;
 
-    /// CPU time actively processing RooPC and ServerTask messages in cycles.
+    /// CPU time spent executing API calls in cycles (excludes poll()).
+    uint64_t api_cycles;
+
+    /// CPU time spent in the poll() loop performing useful work in cycles.
     uint64_t active_cycles;
 
-    /// CPU time running Roo with no work to do in cycles.
+    /// CPU time spent in the poll() loop doing no work in cycles.
     uint64_t idle_cycles;
 
     /// Number of application message bytes sent.
