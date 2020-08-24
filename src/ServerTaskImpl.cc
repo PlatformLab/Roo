@@ -149,8 +149,6 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination, const void* request,
     bufferedMessageAddress = destination;
     bufferedMessage = std::move(message);
 
-    SpinLock::Lock lock(pingInfo.mutex);
-    pingInfo.requests.push_back({newRequestId, destination});
     Perf::counters.server_api_cycles.add(timer.split());
 }
 
@@ -358,6 +356,9 @@ ServerTaskImpl::sendBufferedMessage()
         if (bufferedMessageIsRequest) {
             bufferedMessage->prepend(&bufferedRequestHeader,
                                      sizeof(bufferedRequestHeader));
+            SpinLock::Lock lock(pingInfo.mutex);
+            pingInfo.requests.push_back(
+                {bufferedRequestHeader.requestId, bufferedMessageAddress});
         } else {
             bufferedMessage->prepend(&bufferedResponseHeader,
                                      sizeof(bufferedResponseHeader));

@@ -652,6 +652,7 @@ TEST_F(ServerTaskImplTest, sendBufferedMessage_request)
 
     EXPECT_EQ(0, task->requestCount);
     EXPECT_EQ(0, task->responseCount);
+    EXPECT_TRUE(task->pingInfo.requests.empty());
     EXPECT_TRUE(task->pendingMessages.empty());
     EXPECT_TRUE(task->outboundMessages.empty());
 
@@ -664,6 +665,7 @@ TEST_F(ServerTaskImplTest, sendBufferedMessage_request)
 
     task->sendBufferedMessage();
 
+    EXPECT_EQ(0xFEED, task->pingInfo.requests.back().destination);
     EXPECT_EQ(&outMessage, task->pendingMessages.back());
     EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
 
