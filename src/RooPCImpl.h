@@ -73,7 +73,7 @@ class RooPCImpl : public RooPC {
         bool complete;
 
         /// Id of the request that should be pinged to keep this task alive.
-        Proto::RequestId pingRequestId;
+        Proto::RequestId pingReceiverId;
 
         /// Address to which pings should be sent.
         Homa::Driver::Address pingAddress;

@@ -190,7 +190,7 @@ SocketImpl::processIncomingMessages()
             Proto::PingHeader header;
             message->get(0, &header, sizeof(header));
             SpinLock::Lock lock_socket(mutex);
-            auto it = tasks.find(header.requestId);
+            auto it = tasks.find(header.receiverId);
             if (it != tasks.end()) {
                 ServerTaskImpl* task = it->second;
                 task->handlePing(&header, std::move(message));

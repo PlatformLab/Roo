@@ -277,7 +277,9 @@ TEST_F(SocketImplTest, processIncomingMessages_Ping)
     Mock::Homa::MockInMessage inMessage;
     Mock::Homa::MockOutMessage outMessage;
     Proto::PingHeader header;
-    header.requestId = requestId;
+    header.receiverId = requestId;
+    header.targetId = requestId.branchId;
+    header.pong = true;
     EXPECT_CALL(transport, receive())
         .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>(&inMessage))))
         .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>())));

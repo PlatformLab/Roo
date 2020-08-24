@@ -118,7 +118,7 @@ TEST_F(RooPCImplTest, send)
     EXPECT_EQ(1, rpc->requestCount);
     ASSERT_TRUE(rpc->tasks.find(requestId.branchId) != rpc->tasks.end());
     EXPECT_FALSE(rpc->tasks.at(requestId.branchId).complete);
-    EXPECT_EQ(requestId, rpc->tasks.at(requestId.branchId).pingRequestId);
+    EXPECT_EQ(requestId, rpc->tasks.at(requestId.branchId).pingReceiverId);
     EXPECT_EQ(0xFEED, rpc->tasks.at(requestId.branchId).pingAddress);
     EXPECT_EQ(0, rpc->tasks.at(requestId.branchId).pingCount);
     EXPECT_EQ(1U, rpc->manifestsOutstanding);
@@ -431,7 +431,7 @@ TEST_F(RooPCImplTest, handlePong_branchIncomplete)
     rpc->handlePong(&header, std::move(message));
 
     EXPECT_FALSE(rpc->tasks.at(branchId).complete);
-    EXPECT_EQ(requestId, rpc->tasks.at(branchId).pingRequestId);
+    EXPECT_EQ(requestId, rpc->tasks.at(branchId).pingReceiverId);
     EXPECT_EQ(0xFEED, rpc->tasks.at(branchId).pingAddress);
     EXPECT_EQ(0, rpc->tasks.at(branchId).pingCount);
     EXPECT_EQ(1, rpc->manifestsOutstanding);
@@ -449,7 +449,7 @@ TEST_F(RooPCImplTest, handlePong_branchIncomplete)
     rpc->handlePong(&header, std::move(message));
 
     EXPECT_FALSE(rpc->tasks.at(branchId).complete);
-    EXPECT_EQ(delegateId, rpc->tasks.at(branchId).pingRequestId);
+    EXPECT_EQ(delegateId, rpc->tasks.at(branchId).pingReceiverId);
     EXPECT_EQ(0xBEEF, rpc->tasks.at(branchId).pingAddress);
     EXPECT_EQ(0, rpc->tasks.at(branchId).pingCount);
     EXPECT_EQ(1, rpc->manifestsOutstanding);
@@ -610,7 +610,7 @@ TEST_F(RooPCImplTest, processManifest)
 
     EXPECT_FALSE(rpc->tasks.at(Proto::BranchId(taskId, 1)).complete);
     EXPECT_EQ(requestId,
-              rpc->tasks.at(Proto::BranchId(taskId, 1)).pingRequestId);
+              rpc->tasks.at(Proto::BranchId(taskId, 1)).pingReceiverId);
     EXPECT_EQ(0xFEED, rpc->tasks.at(Proto::BranchId(taskId, 1)).pingAddress);
     EXPECT_EQ(0, rpc->tasks.at(Proto::BranchId(taskId, 1)).pingCount);
 

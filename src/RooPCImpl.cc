@@ -239,10 +239,10 @@ RooPCImpl::handlePong(Proto::PongHeader* header,
         auto it = tasks.find(requestId.branchId);
         if (it != tasks.end()) {
             TaskInfo* task = &it->second;
-            if (!(task->pingRequestId.branchId == requestId.branchId) ||
-                task->pingRequestId.sequence < requestId.sequence) {
+            if (!(task->pingReceiverId.branchId == requestId.branchId) ||
+                task->pingReceiverId.sequence < requestId.sequence) {
                 // Update the ping target
-                task->pingRequestId = requestId;
+                task->pingReceiverId = requestId;
                 task->pingAddress = socket->transport->getDriver()->getAddress(
                     &header->manifest.serverAddress);
             }
@@ -287,6 +287,7 @@ RooPCImpl::handleTimeout()
     if (manifestsOutstanding > 0) {
         // Ping tasks for which we don't have manifests.
         for (auto& it : tasks) {
+            Proto::BranchId targetBranch = it.first;
             TaskInfo* info = &it.second;
 
             // Check if task is still in progress.
@@ -304,7 +305,8 @@ RooPCImpl::handleTimeout()
             // Send a ping.
             Homa::unique_ptr<Homa::OutMessage> ping =
                 socket->transport->alloc();
-            Proto::PingHeader pingHeader(info->pingRequestId);
+            Proto::PingHeader pingHeader(info->pingReceiverId, targetBranch,
+                                         true);
             ping->append(&pingHeader, sizeof(Proto::PingHeader));
             ping->send(info->pingAddress, Homa::OutMessage::NO_RETRY |
                                               Homa::OutMessage::NO_KEEP_ALIVE);

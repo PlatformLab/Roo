@@ -259,6 +259,103 @@ ACTION_P(SaveBlob, pointer)
     std::memcpy(pointer, arg0, arg1);
 }
 
+TEST_F(ServerTaskImplTest, handlePing_proxy)
+{
+    initDefaultTask();
+    Proto::BranchId branchId[3];
+    for (uint64_t i = 0; i < 3; ++i) {
+        branchId[i] = Proto::BranchId(task->taskId, task->requestCount);
+        task->requestCount += 1;
+        Proto::RequestId newRequestId(branchId[i], 0);
+        task->pingInfo.requests.push_back({newRequestId, i});
+    }
+    Proto::RequestId targetRequestId = Proto::RequestId{branchId[1], 0};
+
+    Proto::PingHeader header;
+    header.receiverId = task->requestId;
+    header.targetId = targetRequestId.branchId;
+    header.pong = true;
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+
+    Proto::PingHeader ping;
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PingHeader))))
+        .WillOnce(SaveBlob(&ping));
+    EXPECT_CALL(outMessage, send(Eq(1), Eq(Homa::OutMessage::NO_RETRY |
+                                           Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
+    EXPECT_CALL(inMessage, release());
+
+    task->handlePing(&header, std::move(message));
+
+    EXPECT_EQ(1, task->pingInfo.pingCount);
+    EXPECT_EQ(targetRequestId, ping.receiverId);
+    EXPECT_EQ(targetRequestId.branchId, ping.targetId);
+    EXPECT_TRUE(ping.pong);
+}
+
+TEST_F(ServerTaskImplTest, handlePing_single_delegate)
+{
+    initDefaultTask();
+    task->detached = true;
+    task->responseCount = 0;
+    task->requestCount = 1;
+    Proto::RequestId newRequestId(task->requestId.branchId,
+                                  task->requestId.sequence + 1);
+    task->pingInfo.requests.push_back({newRequestId, 0xABCD});
+
+    Proto::PingHeader header;
+    header.receiverId = task->requestId;
+    header.targetId = task->requestId.branchId;
+    header.pong = true;
+    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
+
+    InSequence s;
+
+    // Expect getLocalAddress
+    EXPECT_CALL(transport, getDriver()).Times(1);
+    EXPECT_CALL(driver,
+                addressToWireFormat(Eq(0xABCD),
+                                    An<Homa::Driver::WireFormatAddress*>()));
+    // Expect Pong
+    Proto::PongHeader pong;
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))))
+        .WillOnce(SaveBlob(&pong));
+    EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
+                                 Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
+
+    // Expect Ping
+    Proto::PingHeader ping;
+    EXPECT_CALL(transport, alloc())
+        .WillOnce(
+            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
+    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PingHeader))))
+        .WillOnce(SaveBlob(&ping));
+    EXPECT_CALL(outMessage,
+                send(Eq(0xABCD), Eq(Homa::OutMessage::NO_RETRY |
+                                    Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
+
+    EXPECT_CALL(inMessage, release());
+
+    task->handlePing(&header, std::move(message));
+
+    EXPECT_EQ(1, task->pingInfo.pingCount);
+    EXPECT_EQ(task->rooId, pong.rooId);
+    EXPECT_FALSE(pong.branchComplete);
+    EXPECT_EQ(newRequestId, pong.manifest.requestId);
+    EXPECT_EQ(newRequestId, ping.receiverId);
+    EXPECT_EQ(newRequestId.branchId, ping.targetId);
+    EXPECT_FALSE(ping.pong);
+}
+
 TEST_F(ServerTaskImplTest, handlePing_basic)
 {
     initDefaultTask();
@@ -266,6 +363,9 @@ TEST_F(ServerTaskImplTest, handlePing_basic)
     Proto::PongHeader pong;
 
     Proto::PingHeader header;
+    header.receiverId = task->requestId;
+    header.targetId = task->requestId.branchId;
+    header.pong = true;
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
 
     Proto::RequestId delegatedRequestId({task->taskId, 0}, 0);
@@ -310,136 +410,15 @@ TEST_F(ServerTaskImplTest, handlePing_basic)
     task->handlePing(&header, std::move(message));
 
     EXPECT_EQ(1, task->pingInfo.pingCount);
-    EXPECT_EQ(delegatedRequestId, ping.requestId);
+    EXPECT_EQ(delegatedRequestId, ping.receiverId);
+    EXPECT_EQ(delegatedRequestId.branchId, ping.targetId);
+    EXPECT_FALSE(ping.pong);
     EXPECT_EQ(task->rooId, pong.rooId);
     EXPECT_TRUE(pong.branchComplete);
     EXPECT_EQ(task->requestId, pong.manifest.requestId);
     EXPECT_EQ(task->taskId, pong.manifest.taskId);
     EXPECT_EQ(1, pong.manifest.requestCount);
     EXPECT_EQ(8, pong.manifest.responseCount);
-}
-
-TEST_F(ServerTaskImplTest, handlePing_detached_single_response)
-{
-    initDefaultTask();
-    Proto::PongHeader pong;
-
-    Proto::PingHeader header;
-    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
-
-    task->detached = true;
-    task->requestCount = 0;
-    task->responseCount = 1;
-    task->pingInfo.pingCount = 0;
-
-    InSequence s;
-    // Expect getLocalAddress
-    EXPECT_CALL(transport, getDriver()).Times(2);
-    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
-    EXPECT_CALL(driver,
-                addressToWireFormat(Eq(0xFEED),
-                                    An<Homa::Driver::WireFormatAddress*>()));
-    // Expect Pong
-    EXPECT_CALL(transport, alloc())
-        .WillOnce(
-            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
-    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))))
-        .WillOnce(SaveBlob(&pong));
-    EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
-                                 Eq(Homa::OutMessage::NO_RETRY |
-                                    Homa::OutMessage::NO_KEEP_ALIVE)));
-    EXPECT_CALL(outMessage, release());
-
-    EXPECT_CALL(inMessage, release());
-
-    task->handlePing(&header, std::move(message));
-
-    EXPECT_EQ(task->rooId, pong.rooId);
-    EXPECT_TRUE(pong.branchComplete);
-    EXPECT_EQ(task->requestId, pong.manifest.requestId);
-    EXPECT_EQ(task->taskId, pong.manifest.taskId);
-    EXPECT_EQ(0, pong.manifest.requestCount);
-    EXPECT_EQ(1, pong.manifest.responseCount);
-}
-
-TEST_F(ServerTaskImplTest, handlePing_detached_single_delegate)
-{
-    initDefaultTask();
-    Proto::PongHeader pong;
-
-    Proto::PingHeader header;
-    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
-
-    task->detached = true;
-    task->requestCount = 1;
-    task->responseCount = 0;
-    task->pingInfo.pingCount = 0;
-
-    InSequence s;
-    // Expect getLocalAddress
-    EXPECT_CALL(transport, getDriver()).Times(2);
-    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
-    EXPECT_CALL(driver,
-                addressToWireFormat(Eq(0xFEED),
-                                    An<Homa::Driver::WireFormatAddress*>()));
-    // Expect Pong
-    EXPECT_CALL(transport, alloc())
-        .WillOnce(
-            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
-    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))))
-        .WillOnce(SaveBlob(&pong));
-    EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
-                                 Eq(Homa::OutMessage::NO_RETRY |
-                                    Homa::OutMessage::NO_KEEP_ALIVE)));
-    EXPECT_CALL(outMessage, release());
-
-    EXPECT_CALL(inMessage, release());
-
-    task->handlePing(&header, std::move(message));
-
-    EXPECT_EQ(task->rooId, pong.rooId);
-    EXPECT_FALSE(pong.branchComplete);
-    EXPECT_EQ(task->requestId, pong.manifest.requestId);
-    EXPECT_EQ(task->taskId, pong.manifest.taskId);
-}
-
-TEST_F(ServerTaskImplTest, handlePing_in_progress)
-{
-    initDefaultTask();
-    Proto::PongHeader pong;
-
-    Proto::PingHeader header;
-    Homa::unique_ptr<Homa::InMessage> message(&inMessage);
-
-    task->detached = false;
-    task->requestCount = 0;
-    task->responseCount = 5;
-    task->pingInfo.pingCount = 0;
-
-    InSequence s;
-    // Expect getLocalAddress
-    EXPECT_CALL(transport, getDriver()).Times(2);
-    EXPECT_CALL(driver, getLocalAddress()).WillOnce(Return(0xFEED));
-    EXPECT_CALL(driver,
-                addressToWireFormat(Eq(0xFEED),
-                                    An<Homa::Driver::WireFormatAddress*>()));
-    // Expect Pong
-    EXPECT_CALL(transport, alloc())
-        .WillOnce(
-            Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
-    EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))))
-        .WillOnce(SaveBlob(&pong));
-    EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
-                                 Eq(Homa::OutMessage::NO_RETRY |
-                                    Homa::OutMessage::NO_KEEP_ALIVE)));
-    EXPECT_CALL(outMessage, release());
-
-    EXPECT_CALL(inMessage, release());
-
-    task->handlePing(&header, std::move(message));
-
-    EXPECT_EQ(task->rooId, pong.rooId);
-    EXPECT_FALSE(pong.branchComplete);
 }
 
 TEST_F(ServerTaskImplTest, handleTimeout)

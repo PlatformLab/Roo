@@ -483,20 +483,37 @@ struct ManifestHeader {
  * Describes the wire format for a Ping message header.
  */
 struct PingHeader {
-    HeaderCommon common;  ///< Common header information.
-    RequestId requestId;  ///< Id of the request being pinged.
+    HeaderCommon common;   ///< Common header information.
+    RequestId receiverId;  ///< RequestId of the task that should receive this
+                           ///< ping message.
+    BranchId targetId;     ///< BranchId of a task that should process this
+                           ///< ping message. If targetId does not match the
+                           ///< receiverId's branch, the receiving task is only
+                           ///< a proxy and should forward this ping.
+    bool pong;             ///< True if the target of this ping should respond
+                           ///< back to the client with a pong.
 
     /// Header default constructor.
     PingHeader()
         : common(Opcode::Ping)
-        , requestId()
+        , receiverId()
+        , targetId()
+        , pong()
     {}
 
     /// Header constructor.
-    explicit PingHeader(RequestId requestId)
+    explicit PingHeader(RequestId receiverId, BranchId targetId, bool pong)
         : common(Opcode::Ping)
-        , requestId(requestId)
+        , receiverId(receiverId)
+        , targetId(targetId)
+        , pong(pong)
     {}
+
+    /// Header constructor.
+    explicit PingHeader(RequestId targetId)
+        : PingHeader(targetId, targetId.branchId, false)
+    {}
+
 } __attribute__((packed));
 
 /**
