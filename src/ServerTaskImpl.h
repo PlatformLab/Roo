@@ -94,12 +94,9 @@ class ServerTaskImpl : public ServerTask {
     /// Number of delegated requests sent by this task.
     uint32_t requestCount;
 
-    /// Messages (include responses, delegated requests, and manifest messages),
-    //. that have been sent by this task.
-    std::list<Homa::unique_ptr<Homa::OutMessage>> outboundMessages;
-
-    /// Messages that have been sent by this task but have not yet completed.
-    std::list<Homa::OutMessage*> pendingMessages;
+    /// Outbound messages that have been initiated by this task but have not yet
+    /// finished sending.
+    std::list<Homa::unique_ptr<Homa::OutMessage>> pendingMessages;
 
     /// Hold information used to handle pings and timeouts.
     struct {
@@ -129,11 +126,17 @@ class ServerTaskImpl : public ServerTask {
     /// Address to which the buffered message should be sent.
     Homa::Driver::Address bufferedMessageAddress;
 
-    /// Header for the buffered message if the message is a request.
-    Proto::RequestHeader bufferedRequestHeader;
+    /// Buffer containing the header for the buffered message.
+    char bufferedMessageHeader[std::max(sizeof(Proto::RequestHeader),
+                                        sizeof(Proto::ResponseHeader))];
 
-    /// Header for the buffered message if the message is a response.
-    Proto::ResponseHeader bufferedResponseHeader;
+    /// Alias of bufferedMessageHeader when storing a RequestHeader.
+    Proto::RequestHeader* const bufferedRequestHeader =
+        reinterpret_cast<Proto::RequestHeader*>(bufferedMessageHeader);
+
+    /// Alias of bufferedMessageHeader when storing a ResponseHeader.
+    Proto::ResponseHeader* const bufferedResponseHeader =
+        reinterpret_cast<Proto::ResponseHeader*>(bufferedMessageHeader);
 
     /// A request or response message that has been buffered to be sent later.
     Homa::unique_ptr<Homa::OutMessage> bufferedMessage;

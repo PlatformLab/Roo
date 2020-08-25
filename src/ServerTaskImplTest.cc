@@ -134,7 +134,6 @@ TEST_F(ServerTaskImplTest, reply)
     EXPECT_EQ(0, task->requestCount);
     EXPECT_EQ(0, task->responseCount);
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->bufferedMessage);
 
     EXPECT_CALL(transport, alloc())
@@ -146,19 +145,18 @@ TEST_F(ServerTaskImplTest, reply)
     task->reply(buffer, sizeof(buffer));
 
     EXPECT_FALSE(task->bufferedMessageIsRequest);
-    EXPECT_EQ(task->rooId, task->bufferedResponseHeader.rooId);
-    EXPECT_EQ(task->requestId.branchId, task->bufferedResponseHeader.branchId);
+    EXPECT_EQ(task->rooId, task->bufferedResponseHeader->rooId);
+    EXPECT_EQ(task->requestId.branchId, task->bufferedResponseHeader->branchId);
     EXPECT_EQ(Proto::ResponseId(task->taskId, 0),
-              task->bufferedResponseHeader.responseId);
+              task->bufferedResponseHeader->responseId);
     EXPECT_EQ(1, task->responseCount);
-    EXPECT_TRUE(task->bufferedResponseHeader.hasManifest);
+    EXPECT_TRUE(task->bufferedResponseHeader->hasManifest);
     EXPECT_EQ(task->delegatedManifest.taskId,
-              task->bufferedResponseHeader.manifest.taskId);
+              task->bufferedResponseHeader->manifest.taskId);
     EXPECT_FALSE(task->hasUnsentManifest);
     EXPECT_EQ(replyAddress, task->bufferedMessageAddress);
     EXPECT_EQ(&outMessage, task->bufferedMessage.get());
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
 
     EXPECT_CALL(outMessage, release());
 }
@@ -175,7 +173,6 @@ TEST_F(ServerTaskImplTest, delegate)
     EXPECT_EQ(0, task->requestCount);
     EXPECT_EQ(0, task->responseCount);
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->bufferedMessage);
 
     EXPECT_CALL(transport, alloc())
@@ -192,16 +189,15 @@ TEST_F(ServerTaskImplTest, delegate)
 
     EXPECT_TRUE(task->bufferedMessageIsRequest);
     EXPECT_EQ(1, task->requestCount);
-    EXPECT_EQ(task->rooId, task->bufferedRequestHeader.rooId);
+    EXPECT_EQ(task->rooId, task->bufferedRequestHeader->rooId);
     EXPECT_EQ(Proto::RequestId({task->taskId, 0}, 0),
-              task->bufferedRequestHeader.requestId);
-    EXPECT_TRUE(task->bufferedRequestHeader.hasManifest);
+              task->bufferedRequestHeader->requestId);
+    EXPECT_TRUE(task->bufferedRequestHeader->hasManifest);
     EXPECT_EQ(task->delegatedManifest.taskId,
-              task->bufferedRequestHeader.manifest.taskId);
+              task->bufferedRequestHeader->manifest.taskId);
     EXPECT_EQ(0xFEED, task->bufferedMessageAddress);
     EXPECT_EQ(&outMessage, task->bufferedMessage.get());
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
 
     EXPECT_CALL(outMessage, release());
 }
@@ -209,13 +205,16 @@ TEST_F(ServerTaskImplTest, delegate)
 TEST_F(ServerTaskImplTest, poll)
 {
     initDefaultTask();
-    task->pendingMessages.push_back(&outMessage);
-    task->pendingMessages.push_back(&outMessage);
+    task->pendingMessages.push_back(
+        Homa::unique_ptr<Homa::OutMessage>(&outMessage));
+    task->pendingMessages.push_back(
+        Homa::unique_ptr<Homa::OutMessage>(&outMessage));
     EXPECT_EQ(2U, task->pendingMessages.size());
     EXPECT_CALL(inMessage, dropped()).WillOnce(Return(false));
     EXPECT_CALL(outMessage, getStatus)
         .WillOnce(Return(Homa::OutMessage::Status::COMPLETED))
         .WillOnce(Return(Homa::OutMessage::Status::SENT));
+    EXPECT_CALL(outMessage, release()).Times(2);
     EXPECT_TRUE(task->poll());
     EXPECT_EQ(1U, task->pendingMessages.size());
 }
@@ -238,7 +237,8 @@ TEST_F(ServerTaskImplTest, poll_done)
 TEST_F(ServerTaskImplTest, poll_failed)
 {
     initDefaultTask();
-    task->pendingMessages.push_back(&outMessage);
+    task->pendingMessages.push_back(
+        Homa::unique_ptr<Homa::OutMessage>(&outMessage));
     EXPECT_CALL(inMessage, dropped()).WillOnce(Return(false));
     EXPECT_CALL(outMessage, getStatus)
         .WillOnce(Return(Homa::OutMessage::Status::FAILED));
@@ -249,7 +249,7 @@ TEST_F(ServerTaskImplTest, poll_failed)
     EXPECT_CALL(outMessage, send(Eq(task->replyAddress),
                                  Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
-    EXPECT_CALL(outMessage, release());
+    EXPECT_CALL(outMessage, release()).Times(2);
 
     EXPECT_FALSE(task->poll());
 }
@@ -437,7 +437,6 @@ TEST_F(ServerTaskImplTest, destroy_noMessages)
     task->hasUnsentManifest = true;
 
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->detached);
 
     EXPECT_CALL(transport, alloc())
@@ -459,7 +458,6 @@ TEST_F(ServerTaskImplTest, destroy_noMessages)
     task->destroy();
 
     EXPECT_FALSE(task->pendingMessages.empty());
-    EXPECT_FALSE(task->outboundMessages.empty());
     EXPECT_TRUE(task->detached);
 
     EXPECT_CALL(outMessage, release());
@@ -477,11 +475,10 @@ TEST_F(ServerTaskImplTest, destroy_request_single)
     task->requestCount = 1;
 
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->detached);
 
     EXPECT_CALL(outMessage, length());
-    EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedRequestHeader),
+    EXPECT_CALL(outMessage, prepend(Eq(task->bufferedRequestHeader),
                                     Eq(sizeof(Proto::RequestHeader))));
     EXPECT_CALL(outMessage,
                 send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
@@ -491,9 +488,8 @@ TEST_F(ServerTaskImplTest, destroy_request_single)
 
     EXPECT_EQ(Proto::RequestId(task->requestId.branchId,
                                task->requestId.sequence + 1),
-              task->bufferedRequestHeader.requestId);
-    EXPECT_EQ(&outMessage, task->pendingMessages.back());
-    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
+              task->bufferedRequestHeader->requestId);
+    EXPECT_EQ(&outMessage, task->pendingMessages.back().get());
     EXPECT_TRUE(task->detached);
 
     EXPECT_CALL(outMessage, release());
@@ -511,11 +507,10 @@ TEST_F(ServerTaskImplTest, destroy_response_single)
     task->responseCount = 1;
 
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->detached);
 
     EXPECT_CALL(outMessage, length());
-    EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedResponseHeader),
+    EXPECT_CALL(outMessage, prepend(Eq(task->bufferedResponseHeader),
                                     Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(outMessage,
                 send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
@@ -523,9 +518,8 @@ TEST_F(ServerTaskImplTest, destroy_response_single)
 
     task->destroy();
 
-    EXPECT_TRUE(task->bufferedResponseHeader.manifestImplied);
-    EXPECT_EQ(&outMessage, task->pendingMessages.back());
-    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
+    EXPECT_TRUE(task->bufferedResponseHeader->manifestImplied);
+    EXPECT_EQ(&outMessage, task->pendingMessages.back().get());
     EXPECT_TRUE(task->detached);
 
     EXPECT_CALL(outMessage, release());
@@ -544,7 +538,6 @@ TEST_F(ServerTaskImplTest, destroy_request_multiple)
     task->responseCount = 1;
 
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->detached);
 
     EXPECT_CALL(transport, getDriver()).Times(2);
@@ -553,7 +546,7 @@ TEST_F(ServerTaskImplTest, destroy_request_multiple)
                 addressToWireFormat(Eq(0xFEED),
                                     An<Homa::Driver::WireFormatAddress*>()));
     EXPECT_CALL(outMessage, length());
-    EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedRequestHeader),
+    EXPECT_CALL(outMessage, prepend(Eq(task->bufferedRequestHeader),
                                     Eq(sizeof(Proto::RequestHeader))));
     EXPECT_CALL(outMessage,
                 send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
@@ -561,15 +554,14 @@ TEST_F(ServerTaskImplTest, destroy_request_multiple)
 
     task->destroy();
 
-    EXPECT_TRUE(task->bufferedRequestHeader.hasManifest);
-    EXPECT_EQ(task->requestId, task->bufferedRequestHeader.manifest.requestId);
-    EXPECT_EQ(task->taskId, task->bufferedRequestHeader.manifest.taskId);
+    EXPECT_TRUE(task->bufferedRequestHeader->hasManifest);
+    EXPECT_EQ(task->requestId, task->bufferedRequestHeader->manifest.requestId);
+    EXPECT_EQ(task->taskId, task->bufferedRequestHeader->manifest.taskId);
     EXPECT_EQ(task->requestCount,
-              task->bufferedRequestHeader.manifest.requestCount);
+              task->bufferedRequestHeader->manifest.requestCount);
     EXPECT_EQ(task->responseCount,
-              task->bufferedRequestHeader.manifest.responseCount);
-    EXPECT_EQ(&outMessage, task->pendingMessages.back());
-    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
+              task->bufferedRequestHeader->manifest.responseCount);
+    EXPECT_EQ(&outMessage, task->pendingMessages.back().get());
     EXPECT_TRUE(task->detached);
 
     EXPECT_CALL(outMessage, release());
@@ -588,7 +580,6 @@ TEST_F(ServerTaskImplTest, destroy_response_multiple)
     task->responseCount = 2;
 
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
     EXPECT_FALSE(task->detached);
 
     EXPECT_CALL(transport, getDriver()).Times(2);
@@ -597,7 +588,7 @@ TEST_F(ServerTaskImplTest, destroy_response_multiple)
                 addressToWireFormat(Eq(0xFEED),
                                     An<Homa::Driver::WireFormatAddress*>()));
     EXPECT_CALL(outMessage, length());
-    EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedResponseHeader),
+    EXPECT_CALL(outMessage, prepend(Eq(task->bufferedResponseHeader),
                                     Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(outMessage,
                 send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
@@ -605,15 +596,15 @@ TEST_F(ServerTaskImplTest, destroy_response_multiple)
 
     task->destroy();
 
-    EXPECT_TRUE(task->bufferedResponseHeader.hasManifest);
-    EXPECT_EQ(task->requestId, task->bufferedResponseHeader.manifest.requestId);
-    EXPECT_EQ(task->taskId, task->bufferedResponseHeader.manifest.taskId);
+    EXPECT_TRUE(task->bufferedResponseHeader->hasManifest);
+    EXPECT_EQ(task->requestId,
+              task->bufferedResponseHeader->manifest.requestId);
+    EXPECT_EQ(task->taskId, task->bufferedResponseHeader->manifest.taskId);
     EXPECT_EQ(task->requestCount,
-              task->bufferedResponseHeader.manifest.requestCount);
+              task->bufferedResponseHeader->manifest.requestCount);
     EXPECT_EQ(task->responseCount,
-              task->bufferedResponseHeader.manifest.responseCount);
-    EXPECT_EQ(&outMessage, task->pendingMessages.back());
-    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
+              task->bufferedResponseHeader->manifest.responseCount);
+    EXPECT_EQ(&outMessage, task->pendingMessages.back().get());
     EXPECT_TRUE(task->detached);
 
     EXPECT_CALL(outMessage, release());
@@ -633,10 +624,9 @@ TEST_F(ServerTaskImplTest, sendBufferedMessage_request)
     EXPECT_EQ(0, task->responseCount);
     EXPECT_TRUE(task->pingInfo.requests.empty());
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
 
     EXPECT_CALL(outMessage, length());
-    EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedRequestHeader),
+    EXPECT_CALL(outMessage, prepend(Eq(task->bufferedRequestHeader),
                                     Eq(sizeof(Proto::RequestHeader))));
     EXPECT_CALL(outMessage,
                 send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
@@ -645,8 +635,7 @@ TEST_F(ServerTaskImplTest, sendBufferedMessage_request)
     task->sendBufferedMessage();
 
     EXPECT_EQ(0xFEED, task->pingInfo.requests.back().destination);
-    EXPECT_EQ(&outMessage, task->pendingMessages.back());
-    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
+    EXPECT_EQ(&outMessage, task->pendingMessages.back().get());
 
     EXPECT_CALL(outMessage, release());
 }
@@ -664,10 +653,9 @@ TEST_F(ServerTaskImplTest, sendBufferedMessage_response)
     EXPECT_EQ(0, task->requestCount);
     EXPECT_EQ(0, task->responseCount);
     EXPECT_TRUE(task->pendingMessages.empty());
-    EXPECT_TRUE(task->outboundMessages.empty());
 
     EXPECT_CALL(outMessage, length());
-    EXPECT_CALL(outMessage, prepend(Eq(&task->bufferedResponseHeader),
+    EXPECT_CALL(outMessage, prepend(Eq(task->bufferedResponseHeader),
                                     Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(outMessage,
                 send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
@@ -675,8 +663,7 @@ TEST_F(ServerTaskImplTest, sendBufferedMessage_response)
 
     task->sendBufferedMessage();
 
-    EXPECT_EQ(&outMessage, task->pendingMessages.back());
-    EXPECT_EQ(&outMessage, task->outboundMessages.back().get());
+    EXPECT_EQ(&outMessage, task->pendingMessages.back().get());
 
     EXPECT_CALL(outMessage, release());
 }

@@ -391,7 +391,8 @@ TEST_F(SocketImplTest, checkDetachedTasks)
         Proto::RequestId requestId({{2, 2}, i}, 0);
         ServerTaskImpl* task =
             createTask(rooId, requestId, 0xDEADBEEF, inMessage);
-        task->pendingMessages.push_back(&outMessage);
+        task->pendingMessages.push_back(
+            Homa::unique_ptr<Homa::OutMessage>(&outMessage));
         socket->detachedTasks.push_back(task);
     }
 

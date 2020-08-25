@@ -47,13 +47,11 @@ ServerTaskImpl::ServerTaskImpl(SocketImpl* socket, Proto::TaskId taskId,
           &requestHeader->replyAddress))
     , responseCount(0)
     , requestCount(0)
-    , outboundMessages()
     , pendingMessages()
     , pingInfo()
     , bufferedMessageIsRequest(false)
     , bufferedMessageAddress()
-    , bufferedRequestHeader()
-    , bufferedResponseHeader()
+    , bufferedMessageHeader()
     , bufferedMessage()
     , hasUnsentManifest(requestHeader->hasManifest)
     , delegatedManifest(requestHeader->manifest)
@@ -97,13 +95,13 @@ ServerTaskImpl::reply(const void* response, std::size_t length)
     Homa::unique_ptr<Homa::OutMessage> message = socket->transport->alloc();
     message->reserve(sizeof(Proto::ResponseHeader));
     message->append(response, length);
-    new (&bufferedResponseHeader) Proto::ResponseHeader(
+    new (bufferedResponseHeader) Proto::ResponseHeader(
         rooId, requestId.branchId, Proto::ResponseId(taskId, responseCount));
     responseCount += 1;
     if (hasUnsentManifest) {
         // piggy-back the delegated manifest
-        bufferedResponseHeader.hasManifest = true;
-        bufferedResponseHeader.manifest = delegatedManifest;
+        bufferedResponseHeader->hasManifest = true;
+        bufferedResponseHeader->manifest = delegatedManifest;
         hasUnsentManifest = false;
     }
     bufferedMessageAddress = replyAddress;
@@ -137,13 +135,13 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination, const void* request,
     Proto::BranchId newBranchId(taskId, requestCount);
     requestCount += 1;
     Proto::RequestId newRequestId(newBranchId, 0);
-    new (&bufferedRequestHeader) Proto::RequestHeader(rooId, newRequestId);
+    new (bufferedRequestHeader) Proto::RequestHeader(rooId, newRequestId);
     socket->transport->getDriver()->addressToWireFormat(
-        replyAddress, &bufferedRequestHeader.replyAddress);
+        replyAddress, &bufferedRequestHeader->replyAddress);
     if (hasUnsentManifest) {
         // piggy-back the delegated manifest
-        bufferedRequestHeader.hasManifest = true;
-        bufferedRequestHeader.manifest = delegatedManifest;
+        bufferedRequestHeader->hasManifest = true;
+        bufferedRequestHeader->manifest = delegatedManifest;
         hasUnsentManifest = false;
     }
     bufferedMessageAddress = destination;
@@ -342,16 +340,15 @@ ServerTaskImpl::destroy()
         message->append(&manifest, sizeof(Proto::Manifest));
         message->send(replyAddress, Homa::OutMessage::NO_RETRY |
                                         Homa::OutMessage::NO_KEEP_ALIVE);
-        pendingMessages.push_back(message.get());
-        outboundMessages.push_back(std::move(message));
+        pendingMessages.push_back(std::move(message));
     } else if (responseCount + requestCount == 1) {
         // Only a single outbound message; use Manifest elimination.
         assert(bufferedMessage);
         if (bufferedMessageIsRequest) {
-            bufferedRequestHeader.requestId =
+            bufferedRequestHeader->requestId =
                 Proto::RequestId(requestId.branchId, requestId.sequence + 1);
         } else {
-            bufferedResponseHeader.manifestImplied = true;
+            bufferedResponseHeader->manifestImplied = true;
         }
         sendBufferedMessage();
     } else {
@@ -366,13 +363,13 @@ ServerTaskImpl::destroy()
             socket->transport->getDriver()->getLocalAddress(),
             &manifest.serverAddress);
         if (bufferedMessageIsRequest) {
-            assert(!bufferedRequestHeader.hasManifest);
-            bufferedRequestHeader.hasManifest = true;
-            bufferedRequestHeader.manifest = manifest;
+            assert(!bufferedRequestHeader->hasManifest);
+            bufferedRequestHeader->hasManifest = true;
+            bufferedRequestHeader->manifest = manifest;
         } else {
-            assert(!bufferedResponseHeader.hasManifest);
-            bufferedResponseHeader.hasManifest = true;
-            bufferedResponseHeader.manifest = manifest;
+            assert(!bufferedResponseHeader->hasManifest);
+            bufferedResponseHeader->hasManifest = true;
+            bufferedResponseHeader->manifest = manifest;
         }
         sendBufferedMessage();
     }
@@ -393,20 +390,19 @@ ServerTaskImpl::sendBufferedMessage()
     if (bufferedMessage) {
         Perf::counters.tx_message_bytes.add(bufferedMessage->length());
         if (bufferedMessageIsRequest) {
-            bufferedMessage->prepend(&bufferedRequestHeader,
-                                     sizeof(bufferedRequestHeader));
+            bufferedMessage->prepend(bufferedRequestHeader,
+                                     sizeof(Proto::RequestHeader));
             SpinLock::Lock lock(pingInfo.mutex);
             pingInfo.requests.push_back(
-                {bufferedRequestHeader.requestId, bufferedMessageAddress});
+                {bufferedRequestHeader->requestId, bufferedMessageAddress});
         } else {
-            bufferedMessage->prepend(&bufferedResponseHeader,
-                                     sizeof(bufferedResponseHeader));
+            bufferedMessage->prepend(bufferedResponseHeader,
+                                     sizeof(Proto::ResponseHeader));
         }
         bufferedMessage->send(
             bufferedMessageAddress,
             Homa::OutMessage::NO_RETRY | Homa::OutMessage::NO_KEEP_ALIVE);
-        pendingMessages.push_back(bufferedMessage.get());
-        outboundMessages.push_back(std::move(bufferedMessage));
+        pendingMessages.push_back(std::move(bufferedMessage));
     }
 }
 
