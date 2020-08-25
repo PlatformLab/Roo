@@ -114,6 +114,7 @@ include(GoogleTest)
 enable_testing()
 add_executable(unit_test
     src/DebugTest.cc
+    src/IntrusiveTest.cc
     src/RooTest.cc
     src/RooPCImplTest.cc
     src/ServerTaskImplTest.cc
