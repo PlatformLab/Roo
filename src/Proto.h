@@ -483,35 +483,20 @@ struct ManifestHeader {
  * Describes the wire format for a Ping message header.
  */
 struct PingHeader {
-    HeaderCommon common;   ///< Common header information.
-    RequestId receiverId;  ///< RequestId of the task that should receive this
-                           ///< ping message.
-    BranchId targetId;     ///< BranchId of a task that should process this
-                           ///< ping message. If targetId does not match the
-                           ///< receiverId's branch, the receiving task is only
-                           ///< a proxy and should forward this ping.
-    bool pong;             ///< True if the target of this ping should respond
-                           ///< back to the client with a pong.
+    HeaderCommon common;  ///< Common header information.
+    RequestId requestId;  ///< RequestId of the task that should receive this
+                          ///< ping message.
 
     /// Header default constructor.
     PingHeader()
         : common(Opcode::Ping)
-        , receiverId()
-        , targetId()
-        , pong()
+        , requestId()
     {}
 
     /// Header constructor.
-    explicit PingHeader(RequestId receiverId, BranchId targetId, bool pong)
+    explicit PingHeader(RequestId requestId)
         : common(Opcode::Ping)
-        , receiverId(receiverId)
-        , targetId(targetId)
-        , pong(pong)
-    {}
-
-    /// Header constructor.
-    explicit PingHeader(RequestId targetId)
-        : PingHeader(targetId, targetId.branchId, false)
+        , requestId(requestId)
     {}
 
 } __attribute__((packed));
@@ -520,26 +505,46 @@ struct PingHeader {
  * Describes the wire format for a Pong message header.
  */
 struct PongHeader {
-    HeaderCommon common;  ///< Common header information.
-    RooId rooId;          ///< Id of the associated RooPC.
-    bool branchComplete;  ///< True if the responding task terminates a task
-                          ///< and the returned manifest can be processed.
-    Manifest manifest;    ///< Responding task's manifest (may be incomplete).
+    HeaderCommon common;     ///< Common header information.
+    RooId rooId;             ///< Id of the associated RooPC.
+    RequestId requestId;     ///< Id of the request that was pinged.
+    TaskId taskId;           ///< Id of the responding task.
+    uint32_t requestCount;   ///< Number of requests delegated by this task.
+    uint32_t responseCount;  ///< Number of responses this task sent.
+    bool taskComplete;       ///< True if the responding task has finished
+                             ///< processing the returned request and response
+                             ///< counts are final.
+    bool branchComplete;     ///< True if the task terminates a branch and
+                             ///< and its manifest can be marked received.
+    // The header is followed by an area follow by an array of WireFormatAddress
+    // entries. The first entry is Each entry holds the
+    // destination address of a delegated request with the entries ordered by
+    // increasing BranchId.
 
     /// Header default constructor.
     PongHeader()
         : common(Opcode::Pong)
         , rooId()
+        , requestId()
+        , taskId()
+        , requestCount()
+        , responseCount()
+        , taskComplete(false)
         , branchComplete(false)
-        , manifest()
     {}
 
     /// Header constructor.
-    explicit PongHeader(RooId rooId, bool taskComplete)
+    explicit PongHeader(RooId rooId, RequestId requestId, TaskId taskId,
+                        uint32_t requestCount, uint32_t responseCount,
+                        bool taskComplete, bool branchComplete)
         : common(Opcode::Pong)
         , rooId(rooId)
-        , branchComplete(taskComplete)
-        , manifest()
+        , requestId(requestId)
+        , taskId(taskId)
+        , requestCount(requestCount)
+        , responseCount(responseCount)
+        , taskComplete(taskComplete)
+        , branchComplete(branchComplete)
     {}
 } __attribute__((packed));
 

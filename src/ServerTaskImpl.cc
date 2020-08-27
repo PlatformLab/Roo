@@ -15,6 +15,9 @@
 
 #include "ServerTaskImpl.h"
 
+#include <vector>
+
+#include "ControlMessage.h"
 #include "Debug.h"
 #include "Perf.h"
 #include "SocketImpl.h"
@@ -184,13 +187,8 @@ ServerTaskImpl::poll()
                 Perf::counters.poll_active_cycles.add(timer.split());
             } else if (status == Homa::OutMessage::Status::FAILED) {
                 // Send Error notification to Client
-                Homa::unique_ptr<Homa::OutMessage> message =
-                    socket->transport->alloc();
-                Proto::ErrorHeader header(rooId);
-                message->append(&header, sizeof(Proto::ErrorHeader));
-                message->send(replyAddress,
-                              Homa::OutMessage::NO_RETRY |
-                                  Homa::OutMessage::NO_KEEP_ALIVE);
+                ControlMessage::send<Proto::ErrorHeader>(socket->transport,
+                                                         replyAddress, rooId);
                 // Failed, no need to keep checking
                 isInProgress = false;
                 Perf::counters.poll_active_cycles.add(timer.split());
@@ -222,79 +220,31 @@ ServerTaskImpl::handlePing(Proto::PingHeader* header,
     SpinLock::Lock lock(pingInfo.mutex);
     pingInfo.pingCount++;
 
-    // Check if this task is only a proxy to the target task.
-    if (!(header->receiverId.branchId == header->targetId)) {
-        // This task is only a proxy; find and forward to the target;
-        for (auto& it : pingInfo.requests) {
-            if (it.requestId.branchId == header->targetId) {
-                Homa::unique_ptr<Homa::OutMessage> ping =
-                    socket->transport->alloc();
-                Proto::PingHeader pingHeader(
-                    it.requestId, it.requestId.branchId, header->pong);
-                ping->append(&pingHeader, sizeof(Proto::PingHeader));
-                ping->send(it.destination, Homa::OutMessage::NO_RETRY |
-                                               Homa::OutMessage::NO_KEEP_ALIVE);
-                break;
-            }
-        }
-        return;
-    }
+    // Send back a Pong with all availble current information about this task.
 
-    // If we are here, this is task is the target of the ping.
+    // The Pong should only include sent requests and not any request which
+    // is currently being buffered. This is because a client will expect to
+    // be able to ping the delegated request; if the request sending is delayed,
+    // the client pings will not succeed.
 
-    // Check if task is complete with single delegated request [Special Case].
-    if (detached && requestCount == 1 && responseCount == 0) {
-        assert(pingInfo.requests.size() == 1);
-        assert(pingInfo.requests.front().requestId.branchId ==
-               requestId.branchId);
-        auto& delegate = pingInfo.requests.front();
-        if (header->pong) {
-            // Reply with pong on behalf of the delegate.
-            Proto::PongHeader pongHeader(rooId, false);
-            new (&pongHeader.manifest)
-                Proto::Manifest(delegate.requestId, {}, 0, 0);
-            socket->transport->getDriver()->addressToWireFormat(
-                delegate.destination, &pongHeader.manifest.serverAddress);
-            Homa::unique_ptr<Homa::OutMessage> pong =
-                socket->transport->alloc();
-            pong->append(&pongHeader, sizeof(Proto::PongHeader));
-            pong->send(replyAddress, Homa::OutMessage::NO_RETRY |
-                                         Homa::OutMessage::NO_KEEP_ALIVE);
-        }
-        // Forward ping to delegate
-        Homa::unique_ptr<Homa::OutMessage> ping = socket->transport->alloc();
-        Proto::PingHeader pingHeader(delegate.requestId);
-        ping->append(&pingHeader, sizeof(Proto::PingHeader));
-        ping->send(delegate.destination, Homa::OutMessage::NO_RETRY |
-                                             Homa::OutMessage::NO_KEEP_ALIVE);
-        return;
-    }
-
-    // Forward Pings to all delegated requests
-    for (auto& it : pingInfo.requests) {
-        Homa::unique_ptr<Homa::OutMessage> ping = socket->transport->alloc();
-        Proto::PingHeader pingHeader(it.requestId);
-        ping->append(&pingHeader, sizeof(Proto::PingHeader));
-        ping->send(it.destination, Homa::OutMessage::NO_RETRY |
-                                       Homa::OutMessage::NO_KEEP_ALIVE);
-    }
-
-    // Check if pong should be sent.
-    if (header->pong) {
-        // Reply with Pong
-        Proto::PongHeader pongHeader(rooId, detached);
-        // If !detached (e.g. !branchComplete), taskId, requestCount, and
-        // responseCount will not be used so it's ok if they are incorrect.
-        new (&pongHeader.manifest)
-            Proto::Manifest(requestId, taskId, requestCount, responseCount);
+    // Branch is complete if detached and not in the special case where the task
+    // has only a single delegate request.
+    const bool isTaskComplete = detached;
+    const bool isBranchComplete =
+        isTaskComplete && !(requestCount == 1 && responseCount == 0);
+    const uint32_t requestsSent = pingInfo.destinations.size();
+    std::vector<Homa::Driver::WireFormatAddress> destinations;
+    for (auto& destination : pingInfo.destinations) {
+        destinations.push_back({});
         socket->transport->getDriver()->addressToWireFormat(
-            socket->transport->getDriver()->getLocalAddress(),
-            &pongHeader.manifest.serverAddress);
-        Homa::unique_ptr<Homa::OutMessage> pong = socket->transport->alloc();
-        pong->append(&pongHeader, sizeof(Proto::PongHeader));
-        pong->send(replyAddress, Homa::OutMessage::NO_RETRY |
-                                     Homa::OutMessage::NO_KEEP_ALIVE);
+            destination, &destinations.back());
     }
+
+    ControlMessage::sendWithPayload<Proto::PongHeader>(
+        socket->transport, replyAddress, destinations.data(),
+        sizeof(Homa::Driver::WireFormatAddress) * requestsSent, rooId,
+        requestId, taskId, requestsSent, responseCount, isTaskComplete,
+        isBranchComplete);
 }
 
 /**
@@ -393,8 +343,15 @@ ServerTaskImpl::sendBufferedMessage()
             bufferedMessage->prepend(bufferedRequestHeader,
                                      sizeof(Proto::RequestHeader));
             SpinLock::Lock lock(pingInfo.mutex);
-            pingInfo.requests.push_back(
-                {bufferedRequestHeader->requestId, bufferedMessageAddress});
+            // Assert that the destinations are added in order.
+            assert(
+                (Proto::RequestId{
+                     {taskId, (uint32_t)pingInfo.destinations.size()}, 0} ==
+                 bufferedRequestHeader->requestId) ||
+                (Proto::RequestId{requestId.branchId, requestId.sequence + 1} ==
+                     bufferedRequestHeader->requestId &&
+                 pingInfo.destinations.empty()));
+            pingInfo.destinations.push_back(bufferedMessageAddress);
         } else {
             bufferedMessage->prepend(bufferedResponseHeader,
                                      sizeof(Proto::ResponseHeader));

@@ -100,20 +100,12 @@ class ServerTaskImpl : public ServerTask {
 
     /// Hold information used to handle pings and timeouts.
     struct {
-        /// Outbound request information.
-        struct RequestInfo {
-            /// Id of the tracked request.
-            Proto::RequestId requestId;
-
-            /// Address of the server to which the request was sent.
-            Homa::Driver::Address destination;
-        };
-
         /// Protects access to this structure.
         SpinLock mutex;
 
-        /// Requests being tracked.
-        std::list<RequestInfo> requests;
+        /// Destination address for each delegated request in increasing order
+        /// of RequestId.
+        std::list<Homa::Driver::Address> destinations;
 
         /// Number of pings received since the last timeout.
         uint pingCount;

@@ -15,6 +15,7 @@
 
 #include "RooPCImpl.h"
 
+#include "ControlMessage.h"
 #include "Debug.h"
 #include "Perf.h"
 #include "SocketImpl.h"
@@ -32,7 +33,7 @@ RooPCImpl::RooPCImpl(SocketImpl* socket, Proto::RooId rooId)
     , pendingRequests()
     , responseQueue()
     , responses()
-    , tasks()
+    , branches()
     , manifestsOutstanding(0)
     , expectedResponses()
     , responsesOutstanding(0)
@@ -65,8 +66,8 @@ RooPCImpl::send(Homa::Driver::Address destination, const void* request,
     message->append(request, length);
     Perf::counters.tx_message_bytes.add(sizeof(outboundHeader) + length);
 
-    // Track spawned tasks
-    tasks.insert({branchId, {false, requestId, destination, 0}});
+    // Track spawned branches
+    branches.insert({branchId, {false, requestId, destination, 0}});
     manifestsOutstanding++;
 
     message->send(destination,
@@ -160,7 +161,7 @@ RooPCImpl::handleResponse(Proto::ResponseHeader* header,
     // Process an implied manifiest if available.
     if (header->manifestImplied) {
         // Mark manifest received.
-        markManifestReceived(header->branchId, lock);
+        updateBranchInfo(header->branchId, true, {}, {}, lock);
     }
 
     // Process piggy-backed manifest if available.
@@ -231,22 +232,80 @@ RooPCImpl::handlePong(Proto::PongHeader* header,
                       Homa::unique_ptr<Homa::InMessage> message)
 {
     SpinLock::Lock lock(mutex);
-    (void)message;
-    if (header->branchComplete) {
-        processManifest(&header->manifest, lock);
-    } else {
-        Proto::RequestId requestId = header->manifest.requestId;
-        auto it = tasks.find(requestId.branchId);
-        if (it != tasks.end()) {
-            TaskInfo* task = &it->second;
-            if (!(task->pingReceiverId.branchId == requestId.branchId) ||
-                task->pingReceiverId.sequence < requestId.sequence) {
-                // Update the ping target
-                task->pingReceiverId = requestId;
-                task->pingAddress = socket->transport->getDriver()->getAddress(
-                    &header->manifest.serverAddress);
+    message->strip(sizeof(Proto::PongHeader));
+    const Proto::RequestId requestId = header->requestId;
+
+    auto it = branches.find(requestId.branchId);
+    if (it == branches.end()) {
+        WARNING("Unexpected PONG from RequestId %s; PONG dropped.",
+                requestId.toString().c_str());
+        return;
+    }
+
+    BranchInfo* branch = &it->second;
+    branch->pingTimeouts = 0;
+
+    if (header->taskComplete && !header->branchComplete) {
+        // Special case where the task only has a single delegated request.
+        assert(header->requestCount == 1 && header->responseCount == 0);
+        if (branch->complete) {
+            // Stale pong received.
+        } else {
+            const Proto::RequestId pingRequestId{requestId.branchId,
+                                                 requestId.sequence + 1};
+            Homa::Driver::WireFormatAddress rawAddress;
+            message->get(0, &rawAddress, sizeof(rawAddress));
+            message->strip(sizeof(rawAddress));
+            const Homa::Driver::Address pingAddress =
+                socket->transport->getDriver()->getAddress(&rawAddress);
+            const bool updated = branch->updatePingTarget(
+                requestId.branchId, pingRequestId, pingAddress);
+            if (updated) {
+                assert(!branch->complete);
+                // Send ping to updated ping target
+                ControlMessage::send<Proto::PingHeader>(socket->transport,
+                                                        branch->pingAddress,
+                                                        branch->pingReceiverId);
             }
-            task->pingCount = 0;
+        }
+    } else {
+        // Normal case
+
+        // Update branch info
+        if (branch->complete) {
+            // Nothing to do.
+        } else if (header->branchComplete) {
+            // Mark branch complete.
+            branch->complete = true;
+            manifestsOutstanding--;
+        }
+
+        // Update child branches
+        for (uint32_t i = 0; i < header->requestCount; ++i) {
+            const Proto::RequestId childRequestId{{header->taskId, i}, 0};
+            Homa::Driver::WireFormatAddress rawAddress;
+            message->get(0, &rawAddress, sizeof(rawAddress));
+            message->strip(sizeof(rawAddress));
+            const Homa::Driver::Address pingAddress =
+                socket->transport->getDriver()->getAddress(&rawAddress);
+            auto ret = updateBranchInfo(childRequestId.branchId, false,
+                                        childRequestId, pingAddress, lock);
+            BranchInfo* const info = ret.first;
+            if (ret.second) {
+                // Send ping to updated ping target
+                ControlMessage::send<Proto::PingHeader>(
+                    socket->transport, info->pingAddress, info->pingReceiverId);
+            }
+        }
+
+        // Update expected responses.
+        for (uint32_t i = 0; i < header->responseCount; ++i) {
+            Proto::ResponseId responseId(header->taskId, i);
+            auto checkResponse = expectedResponses.insert({responseId, false});
+            if (checkResponse.second) {
+                // Response not yet tracked.
+                responsesOutstanding++;
+            }
         }
     }
 
@@ -285,36 +344,40 @@ RooPCImpl::handleTimeout()
 {
     SpinLock::Lock lock(mutex);
     if (manifestsOutstanding > 0) {
-        // Ping tasks for which we don't have manifests.
-        for (auto& it : tasks) {
-            Proto::BranchId targetBranch = it.first;
-            TaskInfo* info = &it.second;
+        // Ping branches for which we don't have manifests.
 
-            // Check if task is still in progress.
+        std::unordered_map<Proto::RequestId, Homa::Driver::Address,
+                           Proto::RequestId::Hasher>
+            pingCandidates;
+        for (auto& it : branches) {
+            BranchInfo* info = &it.second;
+
+            // Check if the branch is still in progress.
             if (info->complete) {
                 // nothing to do
                 continue;
             }
 
-            // Check if task has timedout
-            if (info->pingCount > 3) {
+            // Check if the branch has timed out
+            if (info->pingTimeouts > 3) {
                 error = true;
                 return false;
             }
 
-            // Send a ping.
-            Homa::unique_ptr<Homa::OutMessage> ping =
-                socket->transport->alloc();
-            Proto::PingHeader pingHeader(info->pingReceiverId, targetBranch,
-                                         true);
-            ping->append(&pingHeader, sizeof(Proto::PingHeader));
-            ping->send(info->pingAddress, Homa::OutMessage::NO_RETRY |
-                                              Homa::OutMessage::NO_KEEP_ALIVE);
-            info->pingCount++;
+            // Add to the list of pings that need to be sent.
+            pingCandidates.insert({info->pingReceiverId, info->pingAddress});
+            info->pingTimeouts++;
         }
+
+        // Send out the pings
+        for (auto& it : pingCandidates) {
+            ControlMessage::send<Proto::PingHeader>(socket->transport,
+                                                    it.second, it.first);
+        }
+
         return true;
     } else if (responsesOutstanding > 0) {
-        // All task are complete but the responses haven't come in yet.
+        // All tasks are complete but the responses haven't come in yet.
         // Consider the responses lost and generate an error.
         error = true;
         return false;
@@ -325,33 +388,52 @@ RooPCImpl::handleTimeout()
 }
 
 /**
- * Helper method that performs the necessary book-keeping to mark a request's
- * manifest as received.
+ * Helper method to update information about where pings for this branch should
+ * be sent with the provided information if the provided information is more
+ * up-to-date.
  *
  * @param branchId
- *      Identifies the request associated with the received manifest.
- * @param lock
- *      Reminds the caller that the RooPCImpl::mutex should be held.
+ *      Id of the branch being updated.
+ * @param updatedId
+ *      The pingReceiverId should take on this value if this value is more
+ *      up-to-date.
+ * @param updatedAddress
+ *      The pingAddress should take on this value if this value is more
+ *      up-to-date.
+ *
  */
-void
-RooPCImpl::markManifestReceived(Proto::BranchId branchId,
-                                const SpinLock::Lock& lock)
+bool
+RooPCImpl::BranchInfo::updatePingTarget(Proto::BranchId branchId,
+                                        Proto::RequestId updatedId,
+                                        Homa::Driver::Address updatedAddress)
 {
-    (void)lock;
-
-    auto checkTask = tasks.insert({branchId, {true, {}, {}, 0}});
-    if (checkTask.second) {
-        // Task not previously tracked.
-        // Nothing to do;
-    } else if (checkTask.first->second.complete == false) {
-        // Task previously tracked.
-        checkTask.first->second.complete = true;
-        manifestsOutstanding--;
+    // Check if the ping target needs to be updated.
+    // This can occur if:
+    //   1) The branch entry was first created when a manifest was
+    //      received; manifests don't contain the child branch address so
+    //      the branch entry is initialized with the parent branch address
+    //      was used instead (i.e. branchId's don't match).
+    //   2) The branch is being succeeded by a branch in the same branch
+    //      (i.e. branchIds match and new sequence number is larger).
+    if (updatedId.branchId == branchId) {
+        if (!(pingReceiverId.branchId == branchId) ||
+            (updatedId.sequence > pingReceiverId.sequence)) {
+            // Update the ping target
+            pingReceiverId = updatedId;
+            pingAddress = updatedAddress;
+            return true;
+        } else {
+            // Nothing to do. The information that has just arrive is
+            // either redundant or represents information from for a
+            // parent branch.
+        }
     } else {
-        // Manifest previously received.
-        WARNING("Duplicate Manifest for RooPC (%lu, %lu)", rooId.socketId,
-                rooId.sequence);
+        // Nothing to do. The "updated" ping target is for a different
+        // branch (e.g. the parent branch). We either already have this
+        // parent branch information or have information directly about
+        // the branch itself.
     }
+    return false;
 }
 
 /**
@@ -375,12 +457,8 @@ RooPCImpl::processManifest(Proto::Manifest* manifest,
     // Add tracked task branches.
     for (uint64_t i = 0; i < manifest->requestCount; ++i) {
         Proto::BranchId branchId(manifest->taskId, i);
-        auto checkTask = tasks.insert(
-            {branchId, {false, manifest->requestId, taskServerAddress, 0}});
-        if (checkTask.second) {
-            // Task not previously tracked.
-            manifestsOutstanding++;
-        }
+        updateBranchInfo(branchId, false, manifest->requestId,
+                         taskServerAddress, lock);
     }
 
     // Add expected responses.
@@ -394,7 +472,57 @@ RooPCImpl::processManifest(Proto::Manifest* manifest,
     }
 
     // Mark manifest received.
-    markManifestReceived(manifest->requestId.branchId, lock);
+    updateBranchInfo(manifest->requestId.branchId, true, {}, {}, lock);
+}
+
+/**
+ * Helper method to add/update the tracked branch information to relect the
+ * provided information if the information is more up-to-date. If stale
+ * information is provided, this method does nothing.
+ *
+ * @param branchId
+ *      Id of the branch that should be added/updated.
+ * @param isComplete
+ *      Indicates whether the branch has finished processing.
+ * @param pingReceiverId
+ *      RequestId of the task that can be pinged to check on the branch.
+ * @param pingAddress
+ *      Accompanying address to which pings can be sent.
+ * @param lock
+ *      Reminds the caller that the RooPCImpl::mutex should be held.
+ */
+std::pair<RooPCImpl::BranchInfo*, bool>
+RooPCImpl::updateBranchInfo(Proto::BranchId branchId, bool isComplete,
+                            Proto::RequestId pingReceiverId,
+                            Homa::Driver::Address pingAddress,
+                            const SpinLock::Lock& lock)
+{
+    (void)lock;
+    bool branchUpdated = false;
+    auto ret = branches.insert(
+        {branchId, {isComplete, pingReceiverId, pingAddress, 0}});
+    BranchInfo* const branch = &ret.first->second;
+    if (ret.second) {
+        // Branch not previously tracked.
+        if (!isComplete) {
+            manifestsOutstanding++;
+        }
+        branchUpdated = true;
+    } else {
+        // Needs updating
+        if (branch->complete) {
+            // Nothing to do.
+        } else if (isComplete) {
+            // Mark branch complete.
+            branch->complete = true;
+            manifestsOutstanding--;
+            branchUpdated = true;
+        } else {
+            branchUpdated =
+                branch->updatePingTarget(branchId, pingReceiverId, pingAddress);
+        }
+    }
+    return std::make_pair(branch, branchUpdated);
 }
 
 }  // namespace Roo

@@ -65,26 +65,36 @@ class RooPCImpl : public RooPC {
 
   private:
     /**
-     * Metadata for a task spawned from this RooPC.
+     * Metadata for a RooPC request branch.
      */
-    struct TaskInfo {
-        /// True, if a manifest for this task has been received signaling that
-        /// the task has finished processing; false, otherwise.
+    struct BranchInfo {
+        bool updatePingTarget(Proto::BranchId branchId,
+                              Proto::RequestId updatedId,
+                              Homa::Driver::Address updatedAddress);
+
+        /// True, if a manifest for this branch has been received signaling that
+        /// the branch has finished processing; false, otherwise.
         bool complete;
 
-        /// Id of the request that should be pinged to keep this task alive.
+        /// Id of the request that should be pinged to keep this branch alive.
+        /// This is either the RequestId of the branch's task or the branch's
+        /// parent task.
         Proto::RequestId pingReceiverId;
 
-        /// Address to which pings should be sent.
+        /// Address to which pings should be sent (e.g. the address of the
+        /// server executing the task with id pingReceiverId).
         Homa::Driver::Address pingAddress;
 
-        /// The number of pings sent since last received pong response.
-        uint pingCount;
+        /// The number of ping timeouts that have elapsed since last received
+        /// pong response.
+        uint pingTimeouts;
     };
 
-    void markManifestReceived(Proto::BranchId branchId,
-                              const SpinLock::Lock& lock);
     void processManifest(Proto::Manifest* manifest, const SpinLock::Lock& lock);
+    std::pair<BranchInfo*, bool> updateBranchInfo(
+        Proto::BranchId branchId, bool isComplete,
+        Proto::RequestId pingReceiverId, Homa::Driver::Address pingAddress,
+        const SpinLock::Lock& lock);
 
     /// Monitor-style lock
     SpinLock mutex;
@@ -110,9 +120,9 @@ class RooPCImpl : public RooPC {
     /// All responses that have been received.
     std::deque<Homa::unique_ptr<Homa::InMessage> > responses;
 
-    /// Tracks the tasks spawned from RooPC.
-    std::unordered_map<Proto::BranchId, TaskInfo, Proto::BranchId::Hasher>
-        tasks;
+    /// Tracks the request branches spawned from this RooPC.
+    std::unordered_map<Proto::BranchId, BranchInfo, Proto::BranchId::Hasher>
+        branches;
 
     /// The number of expected branch manifests that have not yet been
     /// received. (Tracked seperately so the _tasks_ structure doesn't need to

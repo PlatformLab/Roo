@@ -251,11 +251,11 @@ TEST_F(SocketImplTest, processIncomingMessages_Manifest)
                 getAddress(An<const Homa::Driver::WireFormatAddress*>()));
     EXPECT_CALL(inMessage, release());
 
-    EXPECT_EQ(0, rpc->tasks.size());
+    EXPECT_EQ(0, rpc->branches.size());
 
     socket->processIncomingMessages();
 
-    EXPECT_EQ(1, rpc->tasks.size());
+    EXPECT_EQ(1, rpc->branches.size());
 }
 
 TEST_F(SocketImplTest, processIncomingMessages_Ping)
@@ -276,10 +276,7 @@ TEST_F(SocketImplTest, processIncomingMessages_Ping)
 
     Mock::Homa::MockInMessage inMessage;
     Mock::Homa::MockOutMessage outMessage;
-    Proto::PingHeader header;
-    header.receiverId = requestId;
-    header.targetId = requestId.branchId;
-    header.pong = true;
+    Proto::PingHeader header(requestId);
     EXPECT_CALL(transport, receive())
         .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>(&inMessage))))
         .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>())));
@@ -288,16 +285,12 @@ TEST_F(SocketImplTest, processIncomingMessages_Ping)
     EXPECT_CALL(inMessage, get(0, _, Eq(sizeof(Proto::PingHeader))))
         .WillOnce(FakeGet(&header));
     // ServerTaskImpl::handlePing() expected calls
-    EXPECT_CALL(transport, getDriver()).Times(2);
-    EXPECT_CALL(driver, getLocalAddress());
-    EXPECT_CALL(driver,
-                addressToWireFormat(_, An<Homa::Driver::WireFormatAddress*>()));
     EXPECT_CALL(transport, alloc())
         .WillOnce(
             Return(ByMove(Homa::unique_ptr<Homa::OutMessage>(&outMessage))));
     EXPECT_CALL(outMessage, append(_, Eq(sizeof(Proto::PongHeader))));
+    EXPECT_CALL(outMessage, append(_, Eq(0)));
     EXPECT_CALL(outMessage, send(_, _));
-
     EXPECT_CALL(outMessage, release());
     EXPECT_CALL(inMessage, release());
 
@@ -315,7 +308,7 @@ TEST_F(SocketImplTest, processIncomingMessages_Pong)
     Proto::PongHeader header;
     header.rooId = rooId;
     header.branchComplete = false;
-    header.manifest.requestId = requestId;
+    header.requestId = requestId;
     EXPECT_CALL(transport, receive())
         .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>(&inMessage))))
         .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>())));
@@ -324,9 +317,17 @@ TEST_F(SocketImplTest, processIncomingMessages_Pong)
     EXPECT_CALL(inMessage, get(0, _, Eq(sizeof(Proto::PongHeader))))
         .WillOnce(FakeGet(&header));
     // RooPCImpl::handlePong() expected calls
+    EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::PongHeader))));
     EXPECT_CALL(inMessage, release());
 
+    VectorHandler handler;
+    Debug::setLogHandler(std::ref(handler));
     socket->processIncomingMessages();
+
+    EXPECT_EQ(1U, handler.messages.size());
+    const Debug::DebugMessage& m = handler.messages.at(0);
+    EXPECT_STREQ("handlePong", m.function);
+    Debug::setLogHandler(std::function<void(Debug::DebugMessage)>());
 }
 
 TEST_F(SocketImplTest, processIncomingMessages_Error)
@@ -435,7 +436,7 @@ TEST_F(SocketImplTest, checkClientTimeouts)
 
     // [1] Expired, No reschedule.
     socket->rpcs.insert({rooId[1], rpc[1]});
-    rpc[1]->tasks.insert({{}, {false, {}, {}, 9001}});
+    rpc[1]->branches.insert({{}, {false, {}, {}, 9001}});
     rpc[1]->manifestsOutstanding = 1;
     socket->rpcTimeouts.push_back({past, rooId[1]});
 
