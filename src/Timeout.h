@@ -25,26 +25,29 @@
 namespace Roo {
 
 // Forward declaration.
-template <typename ElementType>
+template <typename T>
 class TimeoutManager;
 
 /**
- * Intrusive structure to keep track of a per object timeout.
+ * A Timeout holds an object that can be added to a TimeoutManager which makes
+ * it available again at a specified point in time.
  *
  * This structure is not thread-safe.
  */
-template <typename ElementType>
+template <typename T>
 class Timeout {
   public:
     /**
-     * Initialize this Timeout, associating it with a particular object.
+     * Initialized a Timeout with an associating object. The object will be
+     * constructed in-place using the provided arguments.
      *
-     * @param owner
-     *      Pointer to the object associated with this Timeout.
+     * @param args
+     *      Arguments for the associated object's constructor.
      */
-    explicit Timeout(ElementType* owner)
-        : expirationCycleTime(0)
-        , owner(owner)
+    template <typename... Args>
+    explicit Timeout(Args&&... args)
+        : object(static_cast<Args&&>(args)...)
+        , expirationCycleTime(0)
         , node(this)
     {}
 
@@ -61,17 +64,17 @@ class Timeout {
         return now >= expirationCycleTime;
     }
 
+    /// The object that is associated with this timeout.
+    T object;
+
   private:
     /// Cycle timestamp when timeout should elapse.
     uint64_t expirationCycleTime;
 
-    /// Pointer to the object that is associated with this timeout.
-    ElementType* owner;
-
     /// Intrusive member to help track this timeout.
-    typename Intrusive::List<Timeout<ElementType>>::Node node;
+    typename Intrusive::List<Timeout<T>>::Node node;
 
-    friend class TimeoutManager<ElementType>;
+    friend class TimeoutManager<T>;
 };
 
 /**
@@ -79,7 +82,7 @@ class Timeout {
  *
  * This structure is not thread-safe.
  */
-template <typename ElementType>
+template <typename T>
 class TimeoutManager {
   public:
     /**
@@ -100,7 +103,7 @@ class TimeoutManager {
      * @param timeout
      *      The Timeout that should be scheduled.
      */
-    inline void setTimeout(Timeout<ElementType>* timeout)
+    inline void setTimeout(Timeout<T>* timeout)
     {
         list.remove(&timeout->node);
         timeout->expirationCycleTime =
@@ -116,7 +119,7 @@ class TimeoutManager {
      * @param timeout
      *      The Timeout that should be canceled.
      */
-    inline void cancelTimeout(Timeout<ElementType>* timeout)
+    inline void cancelTimeout(Timeout<T>* timeout)
     {
         list.remove(&timeout->node);
         if (list.empty()) {
@@ -130,15 +133,14 @@ class TimeoutManager {
     /**
      * Check if any managed Timeouts have elapsed.
      *
-     * This method is thread-safe but may race with the other
-     * non-thread-safe methods of the TimeoutManager (e.g. concurrent calls
-     * to setTimeout() or cancelTimeout() may not be reflected in the result
-     * of this method call).
+     * This method is thread-safe but may race with the other non-thread-safe
+     * methods of the TimeoutManager (e.g. concurrent calls to setTimeout() or
+     * cancelTimeout() may not be reflected in the result of this method call).
      *
      * @param now
-     *      Optionally provided "current" timestamp cycle time. Used to
-     * avoid unnecessary calls to PerfUtils::Cycles::rdtsc() if the current
-     * time is already available to the caller.
+     *      Optionally provided "current" timestamp cycle time. Used to avoid
+     *      unnecessary calls to PerfUtils::Cycles::rdtsc() if the current time
+     *      is already available to the caller.
      */
     inline bool anyElapsed(uint64_t now = PerfUtils::Cycles::rdtsc())
     {
@@ -157,24 +159,23 @@ class TimeoutManager {
     }
 
     /**
-     * Return a reference the managed timeout element that expires first.
+     * Return a pointer the managed timeout element that expires first.
      *
      * Calling front() an empty TimeoutManager is undefined.
      */
-    inline ElementType& front()
+    inline Timeout<T>* front()
     {
-        return *list.front().owner;
+        return &list.front();
     }
 
     /**
-     * Return a const reference the managed timeout element that expires
-     * first.
+     * Return a const pointer the managed timeout element that expires first.
      *
      * Calling front() an empty TimeoutManager is undefined.
      */
-    inline const ElementType& front() const
+    inline const Timeout<T>* front() const
     {
-        return *list.front().owner;
+        return &list.front();
     }
 
   private:
@@ -187,7 +188,7 @@ class TimeoutManager {
     std::atomic<uint64_t> nextTimeout;
 
     /// Used to keep track of all timeouts under management.
-    Intrusive::List<Timeout<ElementType>> list;
+    Intrusive::List<Timeout<T>> list;
 };
 
 }  // namespace Roo

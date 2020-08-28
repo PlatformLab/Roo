@@ -25,7 +25,7 @@ TEST(TimeoutTest, hasElapsed)
 {
     PerfUtils::Cycles::mockTscValue = 999;
 
-    Timeout<char> t(nullptr);
+    Timeout<int> t;
     t.expirationCycleTime = 1000;
 
     EXPECT_FALSE(t.hasElapsed());
@@ -40,26 +40,24 @@ TEST(TimeoutTest, hasElapsed)
 TEST(TimeoutManagerTest, setTimeout)
 {
     PerfUtils::Cycles::mockTscValue = 10000;
-    TimeoutManager<char> manager(100);
-    char dummyOwner;
-    char owner;
-    Timeout<char> dummy(&dummyOwner);
+    TimeoutManager<int> manager(100);
+    Timeout<int> dummy(-1);
     dummy.expirationCycleTime = 42;
     manager.list.push_back(&dummy.node);
     manager.nextTimeout = 0;
 
-    Timeout<char> t(&owner);
+    Timeout<int> t(9001);
 
     EXPECT_EQ(0U, t.expirationCycleTime);
     EXPECT_EQ(nullptr, t.node.list);
-    EXPECT_EQ(&dummyOwner, manager.list.back().owner);
+    EXPECT_EQ(-1, manager.list.back().object);
 
     manager.setTimeout(&t);
 
     EXPECT_EQ(10100U, t.expirationCycleTime);
     EXPECT_EQ(42U, manager.nextTimeout.load());
     EXPECT_EQ(&manager.list, t.node.list);
-    EXPECT_EQ(&owner, manager.list.back().owner);
+    EXPECT_EQ(9001, manager.list.back().object);
 
     manager.list.clear();
     PerfUtils::Cycles::mockTscValue = 0;
@@ -68,11 +66,9 @@ TEST(TimeoutManagerTest, setTimeout)
 TEST(TimeoutManagerTest, setTimeout_reset)
 {
     PerfUtils::Cycles::mockTscValue = 10000;
-    TimeoutManager<char> manager(100);
-    char owner;
-    char dummyOwner;
-    Timeout<char> t(&owner);
-    Timeout<char> dummy(&dummyOwner);
+    TimeoutManager<int> manager(100);
+    Timeout<int> t(42);
+    Timeout<int> dummy(-1);
     dummy.expirationCycleTime = 9001;
     manager.list.push_back(&t.node);
     manager.list.push_back(&dummy.node);
@@ -80,16 +76,16 @@ TEST(TimeoutManagerTest, setTimeout_reset)
 
     EXPECT_EQ(50U, t.expirationCycleTime);
     EXPECT_EQ(&manager.list, t.node.list);
-    EXPECT_EQ(&owner, &manager.front());
-    EXPECT_EQ(&dummyOwner, manager.list.back().owner);
+    EXPECT_EQ(42, manager.front()->object);
+    EXPECT_EQ(-1, manager.list.back().object);
 
     manager.setTimeout(&t);
 
     EXPECT_EQ(10100U, t.expirationCycleTime);
     EXPECT_EQ(9001U, manager.nextTimeout.load());
     EXPECT_EQ(&manager.list, t.node.list);
-    EXPECT_EQ(&dummyOwner, &manager.front());
-    EXPECT_EQ(&owner, manager.list.back().owner);
+    EXPECT_EQ(-1, manager.front()->object);
+    EXPECT_EQ(42, manager.list.back().object);
 
     manager.list.clear();
     PerfUtils::Cycles::mockTscValue = 0;
@@ -97,11 +93,10 @@ TEST(TimeoutManagerTest, setTimeout_reset)
 
 TEST(TimeoutManagerTest, cancelTimeout)
 {
-    TimeoutManager<char> manager(100);
-    char owner;
-    Timeout<char> t1(&owner);
+    TimeoutManager<int> manager(100);
+    Timeout<int> t1(1);
     t1.expirationCycleTime = 42;
-    Timeout<char> t2(&owner);
+    Timeout<int> t2(2);
     t2.expirationCycleTime = 9001;
     manager.list.push_back(&t1.node);
     manager.list.push_back(&t2.node);
