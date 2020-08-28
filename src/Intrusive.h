@@ -16,6 +16,7 @@
 #ifndef ROO_INTRUSIVE_H
 #define ROO_INTRUSIVE_H
 
+#include <cassert>
 #include <iterator>
 
 namespace Roo {
