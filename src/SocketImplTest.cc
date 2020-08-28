@@ -101,7 +101,7 @@ TEST_F(SocketImplTest, allocRooPC)
     Roo::unique_ptr<RooPC> rpc = socket->allocRooPC();
     EXPECT_EQ(2U, socket->nextSequenceNumber.load());
     EXPECT_FALSE(socket->rpcs.find(rooId) == socket->rpcs.end());
-    EXPECT_EQ(rooId, socket->rpcTimeouts.back().object);
+    EXPECT_EQ(rooId, socket->rpcTimeouts.front()->object);
 }
 
 TEST_F(SocketImplTest, receive)
@@ -405,57 +405,60 @@ TEST_F(SocketImplTest, checkDetachedTasks)
         .WillOnce(Return(Homa::OutMessage::Status::IN_PROGRESS));
 
     EXPECT_EQ(2, socket->detachedTasks.size());
-    EXPECT_EQ(0, socket->taskTimeouts.size());
+    EXPECT_EQ(0, socket->taskTimeouts.list.size());
 
     socket->checkDetachedTasks();
 
     EXPECT_EQ(1, socket->detachedTasks.size());
-    EXPECT_EQ(1, socket->taskTimeouts.size());
+    EXPECT_EQ(1, socket->taskTimeouts.list.size());
 }
 
 TEST_F(SocketImplTest, checkClientTimeouts)
 {
     Proto::RooId rooId[4];
+    Timeout<Proto::RooId>* timeout[4];
     for (int i = 0; i < 4; ++i) {
         rooId[i] = socket->allocTaskId();
+        timeout[i] = socket->rpcTimeoutPool.construct(rooId[i]);
     }
     RooPCImpl* rpc[2];
     for (int i = 0; i < 2; ++i) {
         rpc[i] = new RooPCImpl(socket, rooId[i]);
     }
 
-    uint64_t past = PerfUtils::Cycles::rdtsc() -
-                    PerfUtils::Cycles::fromSeconds(24 * 60 * 60);
-    uint64_t future = PerfUtils::Cycles::rdtsc() +
-                      PerfUtils::Cycles::fromSeconds(24 * 60 * 60);
+    uint64_t now = 100 * socket->rpcTimeouts.timeoutIntervalCycles;
+    uint64_t past = now / 2;
+    uint64_t future = now * 2;
 
     // [0] Expired, Reschedule.
     socket->rpcs.insert({rooId[0], rpc[0]});
     rpc[0]->manifestsOutstanding = 1;
-    socket->rpcTimeouts.push_back({past, rooId[0]});
+    PerfUtils::Cycles::mockTscValue = past;
+    socket->rpcTimeouts.setTimeout(timeout[0]);
 
     // [1] Expired, No reschedule.
     socket->rpcs.insert({rooId[1], rpc[1]});
     rpc[1]->branches.insert({{}, {false, {}, {}, 9001}});
     rpc[1]->manifestsOutstanding = 1;
-    socket->rpcTimeouts.push_back({past, rooId[1]});
+    PerfUtils::Cycles::mockTscValue = past;
+    socket->rpcTimeouts.setTimeout(timeout[1]);
 
     // [2] Expired, stale.
-    socket->rpcTimeouts.push_back({past, rooId[2]});
+    PerfUtils::Cycles::mockTscValue = past;
+    socket->rpcTimeouts.setTimeout(timeout[2]);
 
     // [3] Not expired.
-    socket->rpcTimeouts.push_back({future, rooId[3]});
+    PerfUtils::Cycles::mockTscValue = future;
+    socket->rpcTimeouts.setTimeout(timeout[3]);
 
-    socket->nextRpcTimeout = socket->rpcTimeouts.front().expirationTime;
+    EXPECT_EQ(4, socket->rpcTimeouts.list.size());
 
-    EXPECT_EQ(4, socket->rpcTimeouts.size());
-
+    PerfUtils::Cycles::mockTscValue = now;
     socket->checkClientTimeouts();
 
-    EXPECT_EQ(2, socket->rpcTimeouts.size());
-    EXPECT_EQ(rooId[3], socket->rpcTimeouts.front().object);
-    EXPECT_EQ(rooId[0], socket->rpcTimeouts.back().object);
-    EXPECT_EQ(future, socket->nextRpcTimeout);
+    EXPECT_EQ(2, socket->rpcTimeouts.list.size());
+    EXPECT_EQ(rooId[3], socket->rpcTimeouts.list.front().object);
+    EXPECT_EQ(rooId[0], socket->rpcTimeouts.list.back().object);
 }
 
 TEST_F(SocketImplTest, checkTaskTimeouts)
@@ -463,6 +466,7 @@ TEST_F(SocketImplTest, checkTaskTimeouts)
     Mock::Homa::MockInMessage request;
     Proto::RequestId requestId[3];
     ServerTaskImpl* task[3];
+    Timeout<ServerTaskImpl*>* timeout[3];
 
     for (uint i = 0; i < 3; ++i) {
         requestId[i] = {{{2, 2}, i}, 0};
@@ -477,37 +481,39 @@ TEST_F(SocketImplTest, checkTaskTimeouts)
             new ServerTaskImpl(socket, socket->allocTaskId(), &requestHeader,
                                Homa::unique_ptr<Homa::InMessage>(&request));
         socket->tasks.insert({task[i]->getRequestId(), task[i]});
+        timeout[i] = socket->taskTimeoutPool.construct(task[i]);
     }
 
-    uint64_t past = PerfUtils::Cycles::rdtsc() -
-                    PerfUtils::Cycles::fromSeconds(24 * 60 * 60);
-    uint64_t future = PerfUtils::Cycles::rdtsc() +
-                      PerfUtils::Cycles::fromSeconds(24 * 60 * 60);
+    uint64_t now = 100 * socket->taskTimeouts.timeoutIntervalCycles;
+    uint64_t past = now / 2;
+    uint64_t future = now * 2;
 
     // [0] Expired, reschedule.
     task[0]->pingInfo.pingCount = 9001;
-    socket->taskTimeouts.push_back({past, task[0]});
+    PerfUtils::Cycles::mockTscValue = past;
+    socket->taskTimeouts.setTimeout(timeout[0]);
 
     // [1] Expired, done.
-    socket->taskTimeouts.push_back({past, task[1]});
+    PerfUtils::Cycles::mockTscValue = past;
+    socket->taskTimeouts.setTimeout(timeout[1]);
 
     // [2] Not expired.
-    socket->taskTimeouts.push_back({future, task[2]});
+    PerfUtils::Cycles::mockTscValue = future;
+    socket->taskTimeouts.setTimeout(timeout[2]);
 
-    socket->nextTaskTimeout = socket->taskTimeouts.front().expirationTime;
-
-    EXPECT_EQ(3, socket->taskTimeouts.size());
+    EXPECT_EQ(3, socket->taskTimeouts.list.size());
     EXPECT_EQ(3, socket->tasks.size());
+
+    PerfUtils::Cycles::mockTscValue = now;
 
     EXPECT_CALL(request, release()).Times(1);
     socket->checkTaskTimeouts();
 
-    EXPECT_EQ(2, socket->taskTimeouts.size());
-    EXPECT_EQ(task[2], socket->taskTimeouts.front().object);
-    EXPECT_EQ(task[0], socket->taskTimeouts.back().object);
+    EXPECT_EQ(2, socket->taskTimeouts.list.size());
+    EXPECT_EQ(task[2], socket->taskTimeouts.list.front().object);
+    EXPECT_EQ(task[0], socket->taskTimeouts.list.back().object);
     EXPECT_EQ(2, socket->tasks.size());
     EXPECT_EQ(0, socket->tasks.count(requestId[1]));
-    EXPECT_EQ(future, socket->nextTaskTimeout);
 }
 
 TEST_F(SocketImplTest, allocTaskId)

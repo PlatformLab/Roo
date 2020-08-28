@@ -26,8 +26,10 @@
 #include <memory>
 #include <unordered_map>
 
+#include "ObjectPool.h"
 #include "Proto.h"
 #include "SpinLock.h"
+#include "Timeout.h"
 
 namespace Roo {
 
@@ -57,17 +59,6 @@ class SocketImpl : public Socket {
     Homa::Transport* const transport;
 
   private:
-    /**
-     * Associates a timeout value with an object.
-     */
-    template <typename T>
-    struct Timeout {
-        /// Time when the associated object should time out.
-        uint64_t expirationTime;
-        /// The object associated with this timeout.
-        T object;
-    };
-
     void processIncomingMessages();
     void checkDetachedTasks();
     void checkClientTimeouts();
@@ -81,12 +72,6 @@ class SocketImpl : public Socket {
     /// Used to generate socket unique identifiers.
     std::atomic<uint64_t> nextSequenceNumber;
 
-    /// Cycles to wait before pinging to check on requests.
-    uint64_t const WORRY_TIMEOUT_CYCLES;
-
-    /// Cycles of inactive before garbage collecting a task.
-    uint64_t const TASK_TIMEOUT_CYCLES;
-
     // Monitor style mutex.
     SpinLock mutex;
 
@@ -94,11 +79,10 @@ class SocketImpl : public Socket {
     std::unordered_map<Proto::RooId, RooPCImpl*, Proto::RooId::Hasher> rpcs;
 
     /// RooPC ids in increasing timeout order.
-    std::list<Timeout<Proto::RooId>> rpcTimeouts;
+    TimeoutManager<Proto::RooId> rpcTimeouts;
 
-    // The cycle time when the next rpc timeout will elapse (e.g. the expiration
-    // time of the first timeout in rpcTimeouts).
-    std::atomic<uint64_t> nextRpcTimeout;
+    /// Allocator for timeouts used in taskTimeouts.
+    ObjectPool<Timeout<Proto::RooId>> rpcTimeoutPool;
 
     /// Tracks the set of live ServerTask objects managed by this socket.
     std::unordered_map<Proto::RequestId, ServerTaskImpl*,
@@ -116,11 +100,10 @@ class SocketImpl : public Socket {
     /// ServerTask objects have completed transmission and are waiting to be
     /// garbage collected after a timeout. ServerTask objects are held in
     /// timeout order.
-    std::list<Timeout<ServerTaskImpl*>> taskTimeouts;
+    TimeoutManager<ServerTaskImpl*> taskTimeouts;
 
-    // The cycle time when the next task timeout will elapse (e.g. the
-    // expiration time of the first timeout in taskTimeouts).
-    std::atomic<uint64_t> nextTaskTimeout;
+    /// Allocator for timeouts used in taskTimeouts.
+    ObjectPool<Timeout<ServerTaskImpl*>> taskTimeoutPool;
 };
 
 }  // namespace Roo

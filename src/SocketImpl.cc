@@ -43,23 +43,36 @@ SocketImpl::SocketImpl(Homa::Transport* transport)
     : transport(transport)
     , socketId(transport->getId())
     , nextSequenceNumber(1)
-    , WORRY_TIMEOUT_CYCLES(Cycles::fromMicroseconds(WORRY_TIMEOUT_US))
-    , TASK_TIMEOUT_CYCLES(Cycles::fromMicroseconds(TASK_TIMEOUT_US))
     , mutex()
     , rpcs()
-    , rpcTimeouts()
-    , nextRpcTimeout(UINT64_MAX)
+    , rpcTimeouts(Cycles::fromMicroseconds(WORRY_TIMEOUT_US))
+    , rpcTimeoutPool()
     , tasks()
     , pendingTasks()
     , detachedTasks()
-    , taskTimeouts()
-    , nextTaskTimeout(UINT64_MAX)
+    , taskTimeouts(Cycles::fromMicroseconds(TASK_TIMEOUT_US))
+    , taskTimeoutPool()
 {}
 
 /**
  * SocketImpl destructor.
  */
-SocketImpl::~SocketImpl() {}
+SocketImpl::~SocketImpl()
+{
+    SpinLock::Lock lock(mutex);
+
+    while (!rpcTimeouts.empty()) {
+        auto timeout = rpcTimeouts.front();
+        rpcTimeouts.cancelTimeout(timeout);
+        rpcTimeoutPool.destroy(timeout);
+    }
+
+    while (!taskTimeouts.empty()) {
+        auto timeout = taskTimeouts.front();
+        taskTimeouts.cancelTimeout(timeout);
+        taskTimeoutPool.destroy(timeout);
+    }
+}
 
 /**
  * @copydoc Roo::Socket::allocRooPC()
@@ -72,10 +85,8 @@ SocketImpl::allocRooPC()
     Proto::RooId rooId = allocTaskId();
     RooPCImpl* rpc = new RooPCImpl(this, rooId);
     rpcs.insert({rooId, rpc});
-    uint64_t timeoutTime = Cycles::rdtsc() + WORRY_TIMEOUT_CYCLES;
-    rpcTimeouts.push_back({timeoutTime, rooId});
-    nextRpcTimeout.store(rpcTimeouts.front().expirationTime,
-                         std::memory_order_relaxed);
+    Timeout<Proto::RooId>* timeout = rpcTimeoutPool.construct(rooId);
+    rpcTimeouts.setTimeout(timeout);
     Perf::counters.client_api_cycles.add(timer.split());
     return Roo::unique_ptr<RooPC>(rpc);
 }
@@ -247,10 +258,8 @@ SocketImpl::checkDetachedTasks()
         } else {
             // ServerTask is done polling
             it = detachedTasks.erase(it);
-            uint64_t timeoutTime = Cycles::rdtsc() + TASK_TIMEOUT_CYCLES;
-            taskTimeouts.push_back({timeoutTime, task});
-            nextTaskTimeout.store(taskTimeouts.front().expirationTime,
-                                  std::memory_order_relaxed);
+            Timeout<ServerTaskImpl*>* timeout = taskTimeoutPool.construct(task);
+            taskTimeouts.setTimeout(timeout);
             Perf::counters.poll_active_cycles.add(activityTimer.split());
         }
     }
@@ -269,37 +278,31 @@ SocketImpl::checkClientTimeouts()
     uint64_t now = activityTimer.read();
 
     // Fast path check if there are any timeouts about to expire.
-    if (now < nextRpcTimeout.load(std::memory_order_relaxed)) {
+    if (!rpcTimeouts.anyElapsed(now)) {
         return;
     }
 
     SpinLock::Lock lock_socket(mutex);
-    auto it = rpcTimeouts.begin();
-    while (it != rpcTimeouts.end()) {
-        if (now < it->expirationTime) {
+    while (!rpcTimeouts.empty()) {
+        Timeout<Proto::RooId>* timeout = rpcTimeouts.front();
+        if (!timeout->hasElapsed(now)) {
             break;
         } else {
-            Proto::RooId rooId = it->object;
-            it = rpcTimeouts.erase(it);
+            Proto::RooId rooId = timeout->object;
+            bool resetTimeout = false;
             auto rpcHandle = rpcs.find(rooId);
             if (rpcHandle != rpcs.end()) {
                 RooPCImpl* rpc = rpcHandle->second;
-                if (rpc->handleTimeout()) {
-                    // Timeout handled and reset
-                    uint64_t timeoutTime =
-                        Cycles::rdtsc() + WORRY_TIMEOUT_CYCLES;
-                    rpcTimeouts.push_back({timeoutTime, rooId});
-                }
+                resetTimeout = rpc->handleTimeout();
+            }
+            if (resetTimeout) {
+                rpcTimeouts.setTimeout(timeout);
+            } else {
+                rpcTimeouts.cancelTimeout(timeout);
+                rpcTimeoutPool.destroy(timeout);
             }
             Perf::counters.poll_active_cycles.add(activityTimer.split());
         }
-    }
-
-    if (rpcTimeouts.empty()) {
-        nextRpcTimeout.store(UINT64_MAX, std::memory_order_relaxed);
-    } else {
-        nextRpcTimeout.store(rpcTimeouts.front().expirationTime,
-                             std::memory_order_relaxed);
     }
 }
 
@@ -316,35 +319,28 @@ SocketImpl::checkTaskTimeouts()
     uint64_t now = activityTimer.read();
 
     // Fast path check if there are any timeouts about to expire.
-    if (now < nextTaskTimeout.load(std::memory_order_relaxed)) {
+    if (!taskTimeouts.anyElapsed(now)) {
         return;
     }
 
     SpinLock::Lock lock_socket(mutex);
-    auto it = taskTimeouts.begin();
-    while (it != taskTimeouts.end()) {
-        if (now < it->expirationTime) {
+    while (!taskTimeouts.empty()) {
+        Timeout<ServerTaskImpl*>* timeout = taskTimeouts.front();
+        if (!timeout->hasElapsed(now)) {
             break;
         } else {
-            ServerTaskImpl* task = it->object;
-            it = taskTimeouts.erase(it);
+            ServerTaskImpl* task = timeout->object;
             if (task->handleTimeout()) {
                 // Timeout handled and reset
-                uint64_t timeoutTime = Cycles::rdtsc() + TASK_TIMEOUT_CYCLES;
-                taskTimeouts.push_back({timeoutTime, task});
+                taskTimeouts.setTimeout(timeout);
             } else {
+                taskTimeouts.cancelTimeout(timeout);
                 tasks.erase(task->getRequestId());
+                taskTimeoutPool.destroy(timeout);
                 delete task;
             }
             Perf::counters.poll_active_cycles.add(activityTimer.split());
         }
-    }
-
-    if (taskTimeouts.empty()) {
-        nextTaskTimeout.store(UINT64_MAX, std::memory_order_relaxed);
-    } else {
-        nextTaskTimeout.store(taskTimeouts.front().expirationTime,
-                              std::memory_order_relaxed);
     }
 }
 
