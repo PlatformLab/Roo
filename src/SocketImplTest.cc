@@ -154,20 +154,6 @@ TEST_F(SocketImplTest, dropRooPC)
     EXPECT_EQ(0, socket->rpcPool.outstandingObjects);
 }
 
-TEST_F(SocketImplTest, remandTask)
-{
-    Proto::RooId rooId(1, 1);
-    Proto::RequestId requestId({{2, 2}, 2}, 0);
-    SocketImpl::ServerTaskHandle* handle =
-        createTask(rooId, requestId, 0xDEADBEEF);
-
-    EXPECT_EQ(0, socket->detachedTasks.size());
-
-    socket->remandTask(&handle->task);
-
-    EXPECT_EQ(1, socket->detachedTasks.size());
-}
-
 ACTION_P(FakeGet, pointer)
 {
     std::memcpy(arg1, pointer, arg2);
@@ -386,27 +372,6 @@ TEST_F(SocketImplTest, processIncomingMessages_invalid)
     EXPECT_EQ(int(Debug::LogLevel::WARNING), m.logLevel);
     EXPECT_EQ("Unexpected protocol message received.", m.message);
     Debug::setLogHandler(std::function<void(Debug::DebugMessage)>());
-}
-
-TEST_F(SocketImplTest, checkDetachedTasks)
-{
-    Mock::Homa::MockOutMessage outMessage;
-    Proto::RooId rooId(1, 1);
-    for (uint32_t i = 0; i < 1; ++i) {
-        Proto::RequestId requestId({{2, 2}, i}, 0);
-        SocketImpl::ServerTaskHandle* handle =
-            createTask(rooId, requestId, 0xDEADBEEF);
-        socket->detachedTasks.push_back(&handle->task);
-    }
-
-    // Expected ServerTaskImpl::poll() calls
-    EXPECT_CALL(mockIncomingRequest, dropped()).WillOnce(Return(true));
-
-    EXPECT_EQ(1, socket->detachedTasks.size());
-
-    socket->checkDetachedTasks();
-
-    EXPECT_EQ(0, socket->detachedTasks.size());
 }
 
 TEST_F(SocketImplTest, checkClientTimeouts)

@@ -50,7 +50,6 @@ ServerTaskImpl::ServerTaskImpl(SocketImpl* socket, Proto::TaskId taskId,
           &requestHeader->replyAddress))
     , responseCount(0)
     , requestCount(0)
-    , pendingMessages()
     , pingInfo()
     , bufferedMessageIsRequest(false)
     , bufferedMessageAddress()
@@ -154,55 +153,6 @@ ServerTaskImpl::delegate(Homa::Driver::Address destination, const void* request,
 }
 
 /**
- * Perform an incremental amount of any necessary background processing.
- *
- * @return
- *      True, if more background processing is needed (i.e. poll needs to be
- *      called again). False, otherwise.
- */
-bool
-ServerTaskImpl::poll()
-{
-    // Keep track of time spent doing active processing versus idle.
-    Perf::Timer timer;
-
-    bool isInProgress = true;
-
-    if (request->dropped()) {
-        // Nothing left to do
-        isInProgress = false;
-        Perf::counters.poll_active_cycles.add(timer.split());
-    } else if (pendingMessages.empty()) {
-        // No more pending messages.
-        isInProgress = false;
-        Perf::counters.poll_active_cycles.add(timer.split());
-    } else {
-        // Check for any remaining pending messages
-        auto it = pendingMessages.begin();
-        while (it != pendingMessages.end()) {
-            Homa::OutMessage::Status status = (*it)->getStatus();
-            if (status == Homa::OutMessage::Status::SENT) {
-                // Remove and keep checking for other pendingRequests
-                it = pendingMessages.erase(it);
-                Perf::counters.poll_active_cycles.add(timer.split());
-            } else if (status == Homa::OutMessage::Status::FAILED) {
-                // Send Error notification to Client
-                ControlMessage::send<Proto::ErrorHeader>(socket->transport,
-                                                         replyAddress, rooId);
-                // Failed, no need to keep checking
-                isInProgress = false;
-                Perf::counters.poll_active_cycles.add(timer.split());
-                break;
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    return isInProgress;
-}
-
-/**
  * Process an incoming Ping message.
  *
  * @param header
@@ -292,7 +242,6 @@ ServerTaskImpl::destroy()
         message->append(&manifest, sizeof(Proto::Manifest));
         message->send(replyAddress, Homa::OutMessage::NO_RETRY |
                                         Homa::OutMessage::NO_KEEP_ALIVE);
-        pendingMessages.push_back(std::move(message));
     } else if (responseCount + requestCount == 1) {
         // Only a single outbound message; use Manifest elimination.
         assert(bufferedMessage);
@@ -326,10 +275,9 @@ ServerTaskImpl::destroy()
         sendBufferedMessage();
     }
 
-    // Don't delete the ServerTask yet.  Just pass it to the socket so it can
-    // make sure that any outgoing messages are competely sent.
+    // Don't delete the ServerTask yet; mark it as detached so that the Socket
+    // will know when it asks this ServerTask to handle the task timeout.
     detached.store(true);
-    socket->remandTask(this);
     Perf::counters.server_api_cycles.add(timer.split());
 }
 
@@ -361,7 +309,7 @@ ServerTaskImpl::sendBufferedMessage()
         bufferedMessage->send(
             bufferedMessageAddress,
             Homa::OutMessage::NO_RETRY | Homa::OutMessage::NO_KEEP_ALIVE);
-        pendingMessages.push_back(std::move(bufferedMessage));
+        bufferedMessage.reset();
     }
 }
 

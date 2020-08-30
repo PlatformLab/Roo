@@ -97,7 +97,6 @@ TEST_F(RooPCImplTest, send)
     EXPECT_EQ(0, rpc->requestCount);
     EXPECT_TRUE(rpc->branches.find(requestId.branchId) == rpc->branches.end());
     EXPECT_EQ(0U, rpc->manifestsOutstanding);
-    EXPECT_TRUE(rpc->pendingRequests.empty());
 
     EXPECT_CALL(transport, alloc())
         .WillOnce(
@@ -113,6 +112,7 @@ TEST_F(RooPCImplTest, send)
     EXPECT_CALL(outMessage,
                 send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
+    EXPECT_CALL(outMessage, release());
 
     rpc->send(0xFEED, buffer, sizeof(buffer));
 
@@ -123,9 +123,6 @@ TEST_F(RooPCImplTest, send)
     EXPECT_EQ(0xFEED, rpc->branches.at(requestId.branchId).pingAddress);
     EXPECT_EQ(0, rpc->branches.at(requestId.branchId).pingTimeouts);
     EXPECT_EQ(1U, rpc->manifestsOutstanding);
-    EXPECT_FALSE(rpc->pendingRequests.empty());
-
-    EXPECT_CALL(outMessage, release());
 }
 
 TEST_F(RooPCImplTest, receive)
@@ -145,8 +142,6 @@ TEST_F(RooPCImplTest, checkStatus)
 {
     EXPECT_EQ(RooPC::Status::NOT_STARTED, rpc->checkStatus());
 
-    rpc->pendingRequests.push_back(
-        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
     rpc->requestCount = 1;
     EXPECT_EQ(RooPC::Status::COMPLETED, rpc->checkStatus());
 
@@ -155,15 +150,7 @@ TEST_F(RooPCImplTest, checkStatus)
     EXPECT_EQ(RooPC::Status::FAILED, rpc->checkStatus());
 
     rpc->error = false;
-    EXPECT_CALL(outMessage, getStatus())
-        .WillOnce(Return(Homa::OutMessage::Status::FAILED));
-    EXPECT_EQ(RooPC::Status::FAILED, rpc->checkStatus());
-
-    EXPECT_CALL(outMessage, getStatus())
-        .WillOnce(Return(Homa::OutMessage::Status::SENT));
     EXPECT_EQ(RooPC::Status::IN_PROGRESS, rpc->checkStatus());
-
-    EXPECT_CALL(outMessage, release());
 }
 
 TEST_F(RooPCImplTest, wait)
@@ -196,15 +183,12 @@ TEST_F(RooPCImplTest, handleResponse_basic)
     rpc->manifestsOutstanding = 1;
 
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
-    rpc->pendingRequests.push_back(
-        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
     EXPECT_CALL(transport, getDriver());
     EXPECT_CALL(driver,
                 getAddress(TypedEq<const Homa::Driver::WireFormatAddress*>(
                     &header.manifest.serverAddress)))
         .WillOnce(Return(0xFEED));
-    EXPECT_CALL(outMessage, release());
 
     EXPECT_EQ(0, rpc->expectedResponses.count(responseId));
     EXPECT_EQ(2, rpc->branches.size());
@@ -218,7 +202,6 @@ TEST_F(RooPCImplTest, handleResponse_basic)
     EXPECT_TRUE(rpc->expectedResponses.at(responseId));
     EXPECT_EQ(0, rpc->manifestsOutstanding);
     EXPECT_EQ(0, rpc->responsesOutstanding);
-    EXPECT_TRUE(rpc->pendingRequests.empty());
 
     EXPECT_CALL(inMessage, release());
 }
@@ -233,8 +216,6 @@ TEST_F(RooPCImplTest, handleResponse_unexpected)
     header.branchId = branchId;
     header.responseId = responseId;
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
-    rpc->pendingRequests.push_back(
-        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
     rpc->branches[rootId] = {false, {}, {}, 0};
     rpc->manifestsOutstanding = 1;
 
@@ -250,9 +231,7 @@ TEST_F(RooPCImplTest, handleResponse_unexpected)
     EXPECT_TRUE(rpc->expectedResponses.at(responseId));
     EXPECT_EQ(1, rpc->branches.size());
     EXPECT_EQ(1, rpc->manifestsOutstanding);
-    EXPECT_FALSE(rpc->pendingRequests.empty());
 
-    EXPECT_CALL(outMessage, release());
     EXPECT_CALL(inMessage, release());
 }
 
@@ -262,10 +241,7 @@ TEST_F(RooPCImplTest, handleResponse_expected)
     Proto::ResponseHeader header;
     header.responseId = responseId;
     Homa::unique_ptr<Homa::InMessage> message(&inMessage);
-    rpc->pendingRequests.push_back(
-        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
     EXPECT_CALL(inMessage, strip(Eq(sizeof(Proto::ResponseHeader))));
-    EXPECT_CALL(outMessage, release());
 
     rpc->expectedResponses[responseId] = false;
     rpc->responsesOutstanding = 1;
@@ -278,7 +254,6 @@ TEST_F(RooPCImplTest, handleResponse_expected)
     EXPECT_EQ(0, rpc->responsesOutstanding);
     EXPECT_EQ(1, rpc->responseQueue.size());
     EXPECT_EQ(1, rpc->responses.size());
-    EXPECT_TRUE(rpc->pendingRequests.empty());
 
     EXPECT_CALL(inMessage, release());
 }
@@ -339,8 +314,6 @@ TEST_F(RooPCImplTest, handleManifest)
     rpc->branches[branchId] = {false, {}, {}, 0};
     rpc->manifestsOutstanding = 1;
     rpc->responsesOutstanding = 0;
-    rpc->pendingRequests.push_back(
-        std::move(Homa::unique_ptr<Homa::OutMessage>(&outMessage)));
 
     EXPECT_CALL(inMessage, get(Eq(sizeof(Proto::ManifestHeader)), _,
                                Eq(sizeof(Proto::Manifest))))
@@ -352,7 +325,6 @@ TEST_F(RooPCImplTest, handleManifest)
                 getAddress(An<const Homa::Driver::WireFormatAddress*>()))
         .WillOnce(Return(0xFEED));
     EXPECT_CALL(inMessage, release());
-    EXPECT_CALL(outMessage, release());
 
     rpc->handleManifest(&header, std::move(message));
 
@@ -360,7 +332,6 @@ TEST_F(RooPCImplTest, handleManifest)
     EXPECT_EQ(0, rpc->expectedResponses.size());
     EXPECT_EQ(0, rpc->manifestsOutstanding);
     EXPECT_EQ(0, rpc->responsesOutstanding);
-    EXPECT_TRUE(rpc->pendingRequests.empty());
 }
 
 ACTION_P(SaveBlob, pointer)

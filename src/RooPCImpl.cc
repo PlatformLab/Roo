@@ -30,7 +30,6 @@ RooPCImpl::RooPCImpl(SocketImpl* socket, Proto::RooId rooId)
     , rooId(rooId)
     , error(false)
     , requestCount(0)
-    , pendingRequests()
     , responseQueue()
     , responses()
     , branches()
@@ -72,7 +71,6 @@ RooPCImpl::send(Homa::Driver::Address destination, const void* request,
 
     message->send(destination,
                   Homa::OutMessage::NO_RETRY | Homa::OutMessage::NO_KEEP_ALIVE);
-    pendingRequests.push_back(std::move(message));
     Perf::counters.client_api_cycles.add(timer.split());
 }
 
@@ -106,17 +104,9 @@ RooPCImpl::checkStatus()
         return Status::COMPLETED;
     } else if (error) {
         return Status::FAILED;
+    } else {
+        return Status::IN_PROGRESS;
     }
-
-    // Check for failed requests
-    for (auto it = pendingRequests.begin(); it != pendingRequests.end(); ++it) {
-        Homa::OutMessage* request = it->get();
-        if (request->getStatus() == Homa::OutMessage::Status::FAILED) {
-            return Status::FAILED;
-        }
-    }
-
-    return Status::IN_PROGRESS;
 }
 
 /**
@@ -186,10 +176,6 @@ RooPCImpl::handleResponse(Proto::ResponseHeader* header,
         NOTICE("Duplicate response received for RooPC (%lu, %lu)",
                rooId.socketId, rooId.sequence);
     }
-    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
-        // RooPC is complete
-        pendingRequests.clear();
-    }
 }
 
 /**
@@ -211,11 +197,6 @@ RooPCImpl::handleManifest(Proto::ManifestHeader* header,
         message->get(offest + (sizeof(Proto::Manifest) * i), &manifest,
                      sizeof(Proto::Manifest));
         processManifest(&manifest, lock);
-    }
-
-    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
-        // RooPC is complete
-        pendingRequests.clear();
     }
 }
 
@@ -307,11 +288,6 @@ RooPCImpl::handlePong(Proto::PongHeader* header,
                 responsesOutstanding++;
             }
         }
-    }
-
-    if (manifestsOutstanding == 0 && responsesOutstanding == 0) {
-        // RooPC is complete
-        pendingRequests.clear();
     }
 }
 

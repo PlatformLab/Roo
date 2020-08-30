@@ -111,9 +111,6 @@ class RooPCImpl : public RooPC {
     /// Number of requests sent.
     uint64_t requestCount;
 
-    /// Requests that have been sent for this RooPC.
-    std::deque<Homa::unique_ptr<Homa::OutMessage> > pendingRequests;
-
     /// Responses for this RooPC that have not yet been delievered.
     std::deque<Homa::InMessage*> responseQueue;
 

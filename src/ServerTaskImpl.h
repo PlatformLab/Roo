@@ -19,7 +19,7 @@
 #include <Homa/Homa.h>
 #include <Roo/Roo.h>
 
-#include <list>
+#include <vector>
 
 #include "Proto.h"
 #include "SpinLock.h"
@@ -44,8 +44,6 @@ class ServerTaskImpl : public ServerTask {
     virtual void reply(const void* response, std::size_t length);
     virtual void delegate(Homa::Driver::Address destination,
                           const void* request, std::size_t length);
-
-    bool poll();
     void handlePing(Proto::PingHeader* header,
                     Homa::unique_ptr<Homa::InMessage> message);
     bool handleTimeout();
@@ -94,10 +92,6 @@ class ServerTaskImpl : public ServerTask {
     /// Number of delegated requests sent by this task.
     uint32_t requestCount;
 
-    /// Outbound messages that have been initiated by this task but have not yet
-    /// finished sending.
-    std::list<Homa::unique_ptr<Homa::OutMessage>> pendingMessages;
-
     /// Hold information used to handle pings and timeouts.
     struct {
         /// Protects access to this structure.
@@ -105,7 +99,7 @@ class ServerTaskImpl : public ServerTask {
 
         /// Destination address for each delegated request in increasing order
         /// of RequestId.
-        std::list<Homa::Driver::Address> destinations;
+        std::vector<Homa::Driver::Address> destinations;
 
         /// Number of pings received since the last timeout.
         uint pingCount;

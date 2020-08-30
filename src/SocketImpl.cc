@@ -51,7 +51,6 @@ SocketImpl::SocketImpl(Homa::Transport* transport)
     , rpcTimeouts(Cycles::fromMicroseconds(WORRY_TIMEOUT_US))
     , taskTimeouts(Cycles::fromMicroseconds(TASK_TIMEOUT_US))
     , pendingTasks()
-    , detachedTasks()
 {}
 
 /**
@@ -118,7 +117,6 @@ SocketImpl::poll()
 
     Perf::Timer timer;
     processIncomingMessages();
-    checkDetachedTasks();
     checkClientTimeouts();
     checkTaskTimeouts();
     Perf::counters.poll_total_cycles.add(timer.split());
@@ -137,17 +135,6 @@ SocketImpl::dropRooPC(RooPCImpl* rpc)
     rpcTimeouts.cancelTimeout(&handle->timeout);
     rpcs.erase(it);
     rpcPool.destroy(handle);
-}
-
-/**
- * Pass custody of a detached ServerTask to this socket so that this socket
- * can ensure its outbound message are completely sent.
- */
-void
-SocketImpl::remandTask(ServerTaskImpl* task)
-{
-    SpinLock::Lock lock_socket(mutex);
-    detachedTasks.push_back(task);
 }
 
 /**
@@ -238,32 +225,6 @@ SocketImpl::processIncomingMessages()
             WARNING("Unexpected protocol message received.");
         }
         Perf::counters.poll_active_cycles.add(activityTimer.split());
-    }
-}
-
-/**
- * Check on tasks that have been processed by the application but has not yet
- * finished transmitting all its messages; seperated out of poll() for testing.
- */
-void
-SocketImpl::checkDetachedTasks()
-{
-    // Keep track of time spent doing active processing versus idle.
-    Perf::Timer activityTimer;
-
-    SpinLock::Lock lock_socket(mutex);
-    auto it = detachedTasks.begin();
-    while (it != detachedTasks.end()) {
-        ServerTaskImpl* task = *it;
-        bool not_done = task->poll();
-        activityTimer.split();
-        if (not_done) {
-            ++it;
-        } else {
-            // ServerTask is done polling
-            it = detachedTasks.erase(it);
-            Perf::counters.poll_active_cycles.add(activityTimer.split());
-        }
     }
 }
 
