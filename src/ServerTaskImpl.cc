@@ -258,7 +258,9 @@ bool
 ServerTaskImpl::handleTimeout()
 {
     SpinLock::Lock lock(pingInfo.mutex);
-    if (pingInfo.pingCount > 0) {
+    if (!detached.load()) {
+        return true;
+    } else if (pingInfo.pingCount > 0) {
         pingInfo.pingCount = 0;
         return true;
     } else {

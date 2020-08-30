@@ -33,6 +33,7 @@ using ::testing::An;
 using ::testing::ByMove;
 using ::testing::Eq;
 using ::testing::Invoke;
+using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::SetArgPointee;
 
@@ -42,6 +43,7 @@ class SocketImplTest : public ::testing::Test {
         : transport()
         , driver()
         , socket(nullptr)
+        , mockIncomingRequest()
     {
         ON_CALL(transport, getDriver()).WillByDefault(Return(&driver));
         EXPECT_CALL(transport, getId()).WillOnce(Return(42));
@@ -52,26 +54,31 @@ class SocketImplTest : public ::testing::Test {
         delete socket;
     }
 
-    ServerTaskImpl* createTask(Proto::RooId rooId, Proto::RequestId requestId,
-                               Homa::Driver::Address replyAddress,
-                               Mock::Homa::MockInMessage& inMessage)
+    SocketImpl::ServerTaskHandle* createTask(Proto::RooId rooId,
+                                             Proto::RequestId requestId,
+                                             Homa::Driver::Address replyAddress)
     {
         EXPECT_CALL(transport, getDriver());
         EXPECT_CALL(driver,
                     getAddress(An<const Homa::Driver::WireFormatAddress*>()))
             .WillOnce(Return(replyAddress));
-        EXPECT_CALL(inMessage, strip(An<size_t>()));
+        EXPECT_CALL(mockIncomingRequest, strip(An<size_t>()));
         Proto::RequestHeader header;
         header.rooId = rooId;
         header.requestId = requestId;
-        Homa::unique_ptr<Homa::InMessage> request(&inMessage);
-        return new ServerTaskImpl(socket, Proto::TaskId(42, 1), &header,
-                                  std::move(request));
+        Homa::unique_ptr<Homa::InMessage> request(&mockIncomingRequest);
+
+        SocketImpl::ServerTaskHandle* handle = socket->taskPool.construct(
+            socket, socket->allocTaskId(), &header, std::move(request));
+        socket->tasks.insert({requestId, handle});
+        socket->taskTimeouts.setTimeout(&handle->timeout);
+        return handle;
     }
 
     Mock::Homa::MockTransport transport;
     Mock::Homa::MockDriver driver;
     SocketImpl* socket;
+    NiceMock<Mock::Homa::MockInMessage> mockIncomingRequest;
 };
 
 struct VectorHandler {
@@ -101,24 +108,23 @@ TEST_F(SocketImplTest, allocRooPC)
     Roo::unique_ptr<RooPC> rpc = socket->allocRooPC();
     EXPECT_EQ(2U, socket->nextSequenceNumber.load());
     EXPECT_FALSE(socket->rpcs.find(rooId) == socket->rpcs.end());
-    EXPECT_EQ(rooId, socket->rpcTimeouts.front()->object);
+    EXPECT_EQ(rooId, socket->rpcTimeouts.front()->object->rpc.getId());
 }
 
 TEST_F(SocketImplTest, receive)
 {
-    Mock::Homa::MockInMessage inMessage;
     Proto::RooId rooId(1, 1);
     Proto::RequestId requestId({{2, 2}, 2}, 0);
-    ServerTaskImpl* newtask =
-        createTask(rooId, requestId, 0xDEADBEEF, inMessage);
-    socket->pendingTasks.push_back(newtask);
-    ServerTask* expected_task = newtask;
+    SocketImpl::ServerTaskHandle* handle =
+        createTask(rooId, requestId, 0xDEADBEEF);
+    socket->pendingTasks.push_back(&handle->task);
+    ServerTask* expected_task = &handle->task;
 
     {
         Roo::unique_ptr<ServerTask> task = socket->receive();
         EXPECT_EQ(expected_task, task.get());
         EXPECT_TRUE(socket->pendingTasks.empty());
-        delete task.release();
+        task.release();
     }
 
     {
@@ -139,29 +145,27 @@ TEST_F(SocketImplTest, poll)
 TEST_F(SocketImplTest, dropRooPC)
 {
     Proto::RooId rooId = socket->allocTaskId();
-    RooPCImpl* rpc = new RooPCImpl(socket, rooId);
-    socket->rpcs.insert({rooId, rpc});
+    SocketImpl::RpcHandle* handle = socket->rpcPool.construct(socket, rooId);
+    socket->rpcs.insert({rooId, handle});
 
-    socket->dropRooPC(rpc);
+    socket->dropRooPC(&handle->rpc);
 
     EXPECT_EQ(0, socket->rpcs.count(rooId));
+    EXPECT_EQ(0, socket->rpcPool.outstandingObjects);
 }
 
 TEST_F(SocketImplTest, remandTask)
 {
-    Mock::Homa::MockInMessage inMessage;
     Proto::RooId rooId(1, 1);
     Proto::RequestId requestId({{2, 2}, 2}, 0);
-    ServerTaskImpl* task = createTask(rooId, requestId, 0xDEADBEEF, inMessage);
+    SocketImpl::ServerTaskHandle* handle =
+        createTask(rooId, requestId, 0xDEADBEEF);
 
     EXPECT_EQ(0, socket->detachedTasks.size());
 
-    socket->remandTask(task);
+    socket->remandTask(&handle->task);
 
     EXPECT_EQ(1, socket->detachedTasks.size());
-
-    EXPECT_CALL(inMessage, release());
-    delete task;
 }
 
 ACTION_P(FakeGet, pointer)
@@ -172,34 +176,40 @@ ACTION_P(FakeGet, pointer)
 
 TEST_F(SocketImplTest, processIncomingMessages_Request)
 {
-    Mock::Homa::MockInMessage inMessage;
     Proto::RequestHeader header;
     EXPECT_CALL(transport, receive())
-        .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>(&inMessage))))
+        .WillOnce(Return(
+            ByMove(Homa::unique_ptr<Homa::InMessage>(&mockIncomingRequest))))
         .WillOnce(Return(ByMove(Homa::unique_ptr<Homa::InMessage>())));
-    EXPECT_CALL(inMessage, get(0, _, Eq(sizeof(Proto::HeaderCommon))))
+    EXPECT_CALL(mockIncomingRequest, get(0, _, Eq(sizeof(Proto::HeaderCommon))))
         .WillOnce(FakeGet(&header.common));
-    EXPECT_CALL(inMessage, get(0, _, Eq(sizeof(Proto::RequestHeader))))
+    EXPECT_CALL(mockIncomingRequest,
+                get(0, _, Eq(sizeof(Proto::RequestHeader))))
         .WillOnce(FakeGet(&header));
-    EXPECT_CALL(inMessage, length());
+    EXPECT_CALL(mockIncomingRequest, length());
     // ServerTaskImpl construction expected calls
     EXPECT_CALL(transport, getDriver());
     EXPECT_CALL(driver,
                 getAddress(An<const Homa::Driver::WireFormatAddress*>()));
-    EXPECT_CALL(inMessage, strip(An<size_t>()));
+    EXPECT_CALL(mockIncomingRequest, strip(An<size_t>()));
 
     EXPECT_EQ(0, socket->pendingTasks.size());
+    EXPECT_EQ(0, socket->taskPool.outstandingObjects);
+    EXPECT_EQ(0, socket->taskTimeouts.list.size());
 
     socket->processIncomingMessages();
 
     EXPECT_EQ(1, socket->pendingTasks.size());
+    EXPECT_EQ(1, socket->taskPool.outstandingObjects);
+    EXPECT_EQ(1, socket->taskTimeouts.list.size());
 }
 
 TEST_F(SocketImplTest, processIncomingMessages_Response)
 {
     Proto::RooId rooId = socket->allocTaskId();
-    RooPCImpl* rpc = new RooPCImpl(socket, rooId);
-    socket->rpcs.insert({rooId, rpc});
+    SocketImpl::RpcHandle* handle = socket->rpcPool.construct(socket, rooId);
+    socket->rpcs.insert({rooId, handle});
+    RooPCImpl* rpc = &handle->rpc;
 
     Mock::Homa::MockInMessage inMessage;
     Proto::ResponseHeader header;
@@ -220,13 +230,17 @@ TEST_F(SocketImplTest, processIncomingMessages_Response)
     socket->processIncomingMessages();
 
     EXPECT_EQ(1, rpc->responseQueue.size());
+
+    EXPECT_CALL(inMessage, release());
+    socket->dropRooPC(rpc);
 }
 
 TEST_F(SocketImplTest, processIncomingMessages_Manifest)
 {
     Proto::RooId rooId = socket->allocTaskId();
-    RooPCImpl* rpc = new RooPCImpl(socket, rooId);
-    socket->rpcs.insert({rooId, rpc});
+    SocketImpl::RpcHandle* handle = socket->rpcPool.construct(socket, rooId);
+    socket->rpcs.insert({rooId, handle});
+    RooPCImpl* rpc = &handle->rpc;
 
     Mock::Homa::MockInMessage inMessage;
     Proto::RequestId requestId({{2, 2}, 2}, 0);
@@ -261,18 +275,7 @@ TEST_F(SocketImplTest, processIncomingMessages_Manifest)
 TEST_F(SocketImplTest, processIncomingMessages_Ping)
 {
     Proto::RequestId requestId({{2, 2}, 2}, 0);
-    Proto::RequestHeader requestHeader(requestId.branchId.taskId, requestId);
-    Mock::Homa::MockInMessage request;
-    // ServerTaskImpl construction expected calls
-    EXPECT_CALL(transport, getDriver());
-    EXPECT_CALL(driver,
-                getAddress(An<const Homa::Driver::WireFormatAddress*>()));
-    EXPECT_CALL(request, strip(An<size_t>()));
-    ServerTaskImpl* task =
-        new ServerTaskImpl(socket, socket->allocTaskId(), &requestHeader,
-                           Homa::unique_ptr<Homa::InMessage>(&request));
-    socket->tasks.insert({task->getRequestId(), task});
-    socket->pendingTasks.push_back(task);
+    createTask({1, 1}, requestId, 0xFEED);
 
     Mock::Homa::MockInMessage inMessage;
     Mock::Homa::MockOutMessage outMessage;
@@ -300,8 +303,9 @@ TEST_F(SocketImplTest, processIncomingMessages_Ping)
 TEST_F(SocketImplTest, processIncomingMessages_Pong)
 {
     Proto::RooId rooId = socket->allocTaskId();
-    RooPCImpl* rpc = new RooPCImpl(socket, rooId);
-    socket->rpcs.insert({rooId, rpc});
+    SocketImpl::RpcHandle* handle = socket->rpcPool.construct(socket, rooId);
+    socket->rpcs.insert({rooId, handle});
+    RooPCImpl* rpc = &handle->rpc;
 
     Mock::Homa::MockInMessage inMessage;
     Proto::RequestId requestId({{2, 2}, 2}, 0);
@@ -333,8 +337,9 @@ TEST_F(SocketImplTest, processIncomingMessages_Pong)
 TEST_F(SocketImplTest, processIncomingMessages_Error)
 {
     Proto::RooId rooId = socket->allocTaskId();
-    RooPCImpl* rpc = new RooPCImpl(socket, rooId);
-    socket->rpcs.insert({rooId, rpc});
+    SocketImpl::RpcHandle* handle = socket->rpcPool.construct(socket, rooId);
+    socket->rpcs.insert({rooId, handle});
+    RooPCImpl* rpc = &handle->rpc;
 
     Mock::Homa::MockInMessage inMessage;
     Proto::ErrorHeader header;
@@ -385,45 +390,33 @@ TEST_F(SocketImplTest, processIncomingMessages_invalid)
 
 TEST_F(SocketImplTest, checkDetachedTasks)
 {
-    Mock::Homa::MockInMessage inMessage;
     Mock::Homa::MockOutMessage outMessage;
     Proto::RooId rooId(1, 1);
-    for (uint32_t i = 0; i < 2; ++i) {
+    for (uint32_t i = 0; i < 1; ++i) {
         Proto::RequestId requestId({{2, 2}, i}, 0);
-        ServerTaskImpl* task =
-            createTask(rooId, requestId, 0xDEADBEEF, inMessage);
-        task->pendingMessages.push_back(
-            Homa::unique_ptr<Homa::OutMessage>(&outMessage));
-        socket->detachedTasks.push_back(task);
+        SocketImpl::ServerTaskHandle* handle =
+            createTask(rooId, requestId, 0xDEADBEEF);
+        socket->detachedTasks.push_back(&handle->task);
     }
 
     // Expected ServerTaskImpl::poll() calls
-    EXPECT_CALL(inMessage, dropped())
-        .WillOnce(Return(true))
-        .WillOnce(Return(false));
-    EXPECT_CALL(outMessage, getStatus)
-        .WillOnce(Return(Homa::OutMessage::Status::IN_PROGRESS));
+    EXPECT_CALL(mockIncomingRequest, dropped()).WillOnce(Return(true));
 
-    EXPECT_EQ(2, socket->detachedTasks.size());
-    EXPECT_EQ(0, socket->taskTimeouts.list.size());
+    EXPECT_EQ(1, socket->detachedTasks.size());
 
     socket->checkDetachedTasks();
 
-    EXPECT_EQ(1, socket->detachedTasks.size());
-    EXPECT_EQ(1, socket->taskTimeouts.list.size());
+    EXPECT_EQ(0, socket->detachedTasks.size());
 }
 
 TEST_F(SocketImplTest, checkClientTimeouts)
 {
-    Proto::RooId rooId[4];
-    Timeout<Proto::RooId>* timeout[4];
-    for (int i = 0; i < 4; ++i) {
+    Proto::RooId rooId[3];
+    SocketImpl::RpcHandle* handle[3];
+    for (int i = 0; i < 3; ++i) {
         rooId[i] = socket->allocTaskId();
-        timeout[i] = socket->rpcTimeoutPool.construct(rooId[i]);
-    }
-    RooPCImpl* rpc[2];
-    for (int i = 0; i < 2; ++i) {
-        rpc[i] = new RooPCImpl(socket, rooId[i]);
+        handle[i] = socket->rpcPool.construct(socket, rooId[i]);
+        socket->rpcs.insert({rooId[i], handle[i]});
     }
 
     uint64_t now = 100 * socket->rpcTimeouts.timeoutIntervalCycles;
@@ -431,57 +424,40 @@ TEST_F(SocketImplTest, checkClientTimeouts)
     uint64_t future = now * 2;
 
     // [0] Expired, Reschedule.
-    socket->rpcs.insert({rooId[0], rpc[0]});
-    rpc[0]->manifestsOutstanding = 1;
+    handle[0]->rpc.manifestsOutstanding = 1;
     PerfUtils::Cycles::mockTscValue = past;
-    socket->rpcTimeouts.setTimeout(timeout[0]);
+    socket->rpcTimeouts.setTimeout(&handle[0]->timeout);
 
     // [1] Expired, No reschedule.
-    socket->rpcs.insert({rooId[1], rpc[1]});
-    rpc[1]->branches.insert({{}, {false, {}, {}, 9001}});
-    rpc[1]->manifestsOutstanding = 1;
+    handle[1]->rpc.branches.insert({{}, {false, {}, {}, 9001}});
+    handle[1]->rpc.manifestsOutstanding = 1;
     PerfUtils::Cycles::mockTscValue = past;
-    socket->rpcTimeouts.setTimeout(timeout[1]);
+    socket->rpcTimeouts.setTimeout(&handle[1]->timeout);
 
-    // [2] Expired, stale.
-    PerfUtils::Cycles::mockTscValue = past;
-    socket->rpcTimeouts.setTimeout(timeout[2]);
-
-    // [3] Not expired.
+    // [2] Not expired.
     PerfUtils::Cycles::mockTscValue = future;
-    socket->rpcTimeouts.setTimeout(timeout[3]);
+    socket->rpcTimeouts.setTimeout(&handle[2]->timeout);
 
-    EXPECT_EQ(4, socket->rpcTimeouts.list.size());
+    EXPECT_EQ(3, socket->rpcTimeouts.list.size());
 
     PerfUtils::Cycles::mockTscValue = now;
     socket->checkClientTimeouts();
 
     EXPECT_EQ(2, socket->rpcTimeouts.list.size());
-    EXPECT_EQ(rooId[3], socket->rpcTimeouts.list.front().object);
-    EXPECT_EQ(rooId[0], socket->rpcTimeouts.list.back().object);
+    EXPECT_EQ(handle[2], socket->rpcTimeouts.list.front().object);
+    EXPECT_EQ(handle[0], socket->rpcTimeouts.list.back().object);
 }
 
 TEST_F(SocketImplTest, checkTaskTimeouts)
 {
     Mock::Homa::MockInMessage request;
     Proto::RequestId requestId[3];
-    ServerTaskImpl* task[3];
-    Timeout<ServerTaskImpl*>* timeout[3];
+    SocketImpl::ServerTaskHandle* handle[3];
 
     for (uint i = 0; i < 3; ++i) {
         requestId[i] = {{{2, 2}, i}, 0};
-        Proto::RequestHeader requestHeader(requestId[i].branchId.taskId,
-                                           requestId[i]);
-        // ServerTaskImpl construction expected calls
-        EXPECT_CALL(transport, getDriver());
-        EXPECT_CALL(driver,
-                    getAddress(An<const Homa::Driver::WireFormatAddress*>()));
-        EXPECT_CALL(request, strip(An<size_t>()));
-        task[i] =
-            new ServerTaskImpl(socket, socket->allocTaskId(), &requestHeader,
-                               Homa::unique_ptr<Homa::InMessage>(&request));
-        socket->tasks.insert({task[i]->getRequestId(), task[i]});
-        timeout[i] = socket->taskTimeoutPool.construct(task[i]);
+        handle[i] = createTask(requestId[i].branchId.taskId, requestId[i], {});
+        handle[i]->task.detached = true;
     }
 
     uint64_t now = 100 * socket->taskTimeouts.timeoutIntervalCycles;
@@ -489,31 +465,33 @@ TEST_F(SocketImplTest, checkTaskTimeouts)
     uint64_t future = now * 2;
 
     // [0] Expired, reschedule.
-    task[0]->pingInfo.pingCount = 9001;
+    handle[0]->task.pingInfo.pingCount = 9001;
     PerfUtils::Cycles::mockTscValue = past;
-    socket->taskTimeouts.setTimeout(timeout[0]);
+    socket->taskTimeouts.setTimeout(&handle[0]->timeout);
 
     // [1] Expired, done.
     PerfUtils::Cycles::mockTscValue = past;
-    socket->taskTimeouts.setTimeout(timeout[1]);
+    socket->taskTimeouts.setTimeout(&handle[1]->timeout);
 
     // [2] Not expired.
     PerfUtils::Cycles::mockTscValue = future;
-    socket->taskTimeouts.setTimeout(timeout[2]);
+    socket->taskTimeouts.setTimeout(&handle[2]->timeout);
 
     EXPECT_EQ(3, socket->taskTimeouts.list.size());
     EXPECT_EQ(3, socket->tasks.size());
 
     PerfUtils::Cycles::mockTscValue = now;
 
-    EXPECT_CALL(request, release()).Times(1);
+    EXPECT_CALL(mockIncomingRequest, release()).Times(1);
     socket->checkTaskTimeouts();
 
     EXPECT_EQ(2, socket->taskTimeouts.list.size());
-    EXPECT_EQ(task[2], socket->taskTimeouts.list.front().object);
-    EXPECT_EQ(task[0], socket->taskTimeouts.list.back().object);
+    EXPECT_EQ(handle[2], socket->taskTimeouts.list.front().object);
+    EXPECT_EQ(handle[0], socket->taskTimeouts.list.back().object);
     EXPECT_EQ(2, socket->tasks.size());
     EXPECT_EQ(0, socket->tasks.count(requestId[1]));
+
+    ::testing::Mock::VerifyAndClearExpectations(&mockIncomingRequest);
 }
 
 TEST_F(SocketImplTest, allocTaskId)

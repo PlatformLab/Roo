@@ -41,6 +41,7 @@ class ServerTaskImplTest : public ::testing::Test {
         , outMessage()
         , replyAddress(0xDEADBEEF)
         , socket(nullptr)
+        , handle(nullptr)
         , task(nullptr)
     {
         ON_CALL(transport, getId()).WillByDefault(Return(42));
@@ -53,9 +54,9 @@ class ServerTaskImplTest : public ::testing::Test {
 
     ~ServerTaskImplTest()
     {
-        if (task != nullptr) {
+        if (handle != nullptr) {
             EXPECT_CALL(inMessage, release());
-            delete task;
+            socket->taskPool.destroy(handle);
         }
         delete socket;
     }
@@ -71,8 +72,9 @@ class ServerTaskImplTest : public ::testing::Test {
         header.rooId = Proto::RooId(1, 1);
         header.requestId = Proto::RequestId{{{2, 2}, 3}, 0};
         Homa::unique_ptr<Homa::InMessage> request(&inMessage);
-        task = new ServerTaskImpl(socket, Proto::TaskId(42, 1), &header,
-                                  std::move(request));
+        handle = socket->taskPool.construct(socket, Proto::TaskId(42, 1),
+                                            &header, std::move(request));
+        task = &handle->task;
     }
 
     Mock::Homa::MockTransport transport;
@@ -81,6 +83,7 @@ class ServerTaskImplTest : public ::testing::Test {
     Mock::Homa::MockOutMessage outMessage;
     Homa::Driver::Address replyAddress;
     SocketImpl* socket;
+    SocketImpl::ServerTaskHandle* handle;
     ServerTaskImpl* task;
 };
 
@@ -318,6 +321,10 @@ TEST_F(ServerTaskImplTest, handleTimeout)
 {
     initDefaultTask();
     task->pingInfo.pingCount = 1;
+    EXPECT_FALSE(task->detached.load());
+    EXPECT_TRUE(task->handleTimeout());
+    EXPECT_EQ(1, task->pingInfo.pingCount);
+    task->detached = true;
     EXPECT_TRUE(task->handleTimeout());
     EXPECT_EQ(0, task->pingInfo.pingCount);
     EXPECT_FALSE(task->handleTimeout());

@@ -44,14 +44,14 @@ SocketImpl::SocketImpl(Homa::Transport* transport)
     , socketId(transport->getId())
     , nextSequenceNumber(1)
     , mutex()
+    , rpcPool()
+    , taskPool()
     , rpcs()
-    , rpcTimeouts(Cycles::fromMicroseconds(WORRY_TIMEOUT_US))
-    , rpcTimeoutPool()
     , tasks()
+    , rpcTimeouts(Cycles::fromMicroseconds(WORRY_TIMEOUT_US))
+    , taskTimeouts(Cycles::fromMicroseconds(TASK_TIMEOUT_US))
     , pendingTasks()
     , detachedTasks()
-    , taskTimeouts(Cycles::fromMicroseconds(TASK_TIMEOUT_US))
-    , taskTimeoutPool()
 {}
 
 /**
@@ -60,17 +60,17 @@ SocketImpl::SocketImpl(Homa::Transport* transport)
 SocketImpl::~SocketImpl()
 {
     SpinLock::Lock lock(mutex);
-
-    while (!rpcTimeouts.empty()) {
-        auto timeout = rpcTimeouts.front();
-        rpcTimeouts.cancelTimeout(timeout);
-        rpcTimeoutPool.destroy(timeout);
+    while (!rpcs.empty()) {
+        auto it = rpcs.begin();
+        rpcTimeouts.cancelTimeout(&it->second->timeout);
+        rpcs.erase(it);
+        rpcPool.destroy(it->second);
     }
-
-    while (!taskTimeouts.empty()) {
-        auto timeout = taskTimeouts.front();
-        taskTimeouts.cancelTimeout(timeout);
-        taskTimeoutPool.destroy(timeout);
+    while (!tasks.empty()) {
+        auto it = tasks.begin();
+        taskTimeouts.cancelTimeout(&it->second->timeout);
+        tasks.erase(it);
+        taskPool.destroy(it->second);
     }
 }
 
@@ -83,12 +83,11 @@ SocketImpl::allocRooPC()
     Perf::Timer timer;
     SpinLock::Lock lock_socket(mutex);
     Proto::RooId rooId = allocTaskId();
-    RooPCImpl* rpc = new RooPCImpl(this, rooId);
-    rpcs.insert({rooId, rpc});
-    Timeout<Proto::RooId>* timeout = rpcTimeoutPool.construct(rooId);
-    rpcTimeouts.setTimeout(timeout);
+    RpcHandle* handle = rpcPool.construct(this, rooId);
+    rpcs.insert({rooId, handle});
+    rpcTimeouts.setTimeout(&handle->timeout);
     Perf::counters.client_api_cycles.add(timer.split());
-    return Roo::unique_ptr<RooPC>(rpc);
+    return Roo::unique_ptr<RooPC>(&handle->rpc);
 }
 
 /**
@@ -132,8 +131,12 @@ void
 SocketImpl::dropRooPC(RooPCImpl* rpc)
 {
     SpinLock::Lock lock_socket(mutex);
-    rpcs.erase(rpc->getId());
-    delete rpc;
+    auto it = rpcs.find(rpc->getId());
+    assert(it != rpcs.end());
+    RpcHandle* handle = it->second;
+    rpcTimeouts.cancelTimeout(&handle->timeout);
+    rpcs.erase(it);
+    rpcPool.destroy(handle);
 }
 
 /**
@@ -167,11 +170,12 @@ SocketImpl::processIncomingMessages()
             message->get(0, &header, sizeof(header));
             Perf::counters.rx_message_bytes.add(message->length() -
                                                 sizeof(header));
-            ServerTaskImpl* task = new ServerTaskImpl(
+            ServerTaskHandle* handle = taskPool.construct(
                 this, allocTaskId(), &header, std::move(message));
             SpinLock::Lock lock_socket(mutex);
-            tasks.insert({task->getRequestId(), task});
-            pendingTasks.push_back(task);
+            tasks.insert({handle->task.getRequestId(), handle});
+            taskTimeouts.setTimeout(&handle->timeout);
+            pendingTasks.push_back(&handle->task);
         } else if (common.opcode == Proto::Opcode::Response) {
             // Incoming message is a response
             Proto::ResponseHeader header;
@@ -181,7 +185,7 @@ SocketImpl::processIncomingMessages()
             SpinLock::Lock lock_socket(mutex);
             auto it = rpcs.find(header.rooId);
             if (it != rpcs.end()) {
-                RooPCImpl* rpc = it->second;
+                RooPCImpl* rpc = &it->second->rpc;
                 rpc->handleResponse(&header, std::move(message));
             } else {
                 // There is no RooPC waiting for this message.
@@ -192,7 +196,7 @@ SocketImpl::processIncomingMessages()
             SpinLock::Lock lock_socket(mutex);
             auto it = rpcs.find(manifest.rooId);
             if (it != rpcs.end()) {
-                RooPCImpl* rpc = it->second;
+                RooPCImpl* rpc = &it->second->rpc;
                 rpc->handleManifest(&manifest, std::move(message));
             } else {
                 // There is no RooPC waiting for this manifest.
@@ -203,7 +207,7 @@ SocketImpl::processIncomingMessages()
             SpinLock::Lock lock_socket(mutex);
             auto it = tasks.find(header.requestId);
             if (it != tasks.end()) {
-                ServerTaskImpl* task = it->second;
+                ServerTaskImpl* task = &it->second->task;
                 task->handlePing(&header, std::move(message));
             } else {
                 // There is no associated active ServerTask.
@@ -214,7 +218,7 @@ SocketImpl::processIncomingMessages()
             SpinLock::Lock lock_socket(mutex);
             auto it = rpcs.find(header.rooId);
             if (it != rpcs.end()) {
-                RooPCImpl* rpc = it->second;
+                RooPCImpl* rpc = &it->second->rpc;
                 rpc->handlePong(&header, std::move(message));
             } else {
                 // There is no RooPC waiting for this message.
@@ -225,7 +229,7 @@ SocketImpl::processIncomingMessages()
             SpinLock::Lock lock_socket(mutex);
             auto it = rpcs.find(header.rooId);
             if (it != rpcs.end()) {
-                RooPCImpl* rpc = it->second;
+                RooPCImpl* rpc = &it->second->rpc;
                 rpc->handleError(&header, std::move(message));
             } else {
                 // There is no RooPC waiting for this message.
@@ -258,8 +262,6 @@ SocketImpl::checkDetachedTasks()
         } else {
             // ServerTask is done polling
             it = detachedTasks.erase(it);
-            Timeout<ServerTaskImpl*>* timeout = taskTimeoutPool.construct(task);
-            taskTimeouts.setTimeout(timeout);
             Perf::counters.poll_active_cycles.add(activityTimer.split());
         }
     }
@@ -284,22 +286,15 @@ SocketImpl::checkClientTimeouts()
 
     SpinLock::Lock lock_socket(mutex);
     while (!rpcTimeouts.empty()) {
-        Timeout<Proto::RooId>* timeout = rpcTimeouts.front();
+        Timeout<RpcHandle*>* timeout = rpcTimeouts.front();
         if (!timeout->hasElapsed(now)) {
             break;
         } else {
-            Proto::RooId rooId = timeout->object;
-            bool resetTimeout = false;
-            auto rpcHandle = rpcs.find(rooId);
-            if (rpcHandle != rpcs.end()) {
-                RooPCImpl* rpc = rpcHandle->second;
-                resetTimeout = rpc->handleTimeout();
-            }
-            if (resetTimeout) {
+            RpcHandle* handle = timeout->object;
+            if (handle->rpc.handleTimeout()) {
                 rpcTimeouts.setTimeout(timeout);
             } else {
                 rpcTimeouts.cancelTimeout(timeout);
-                rpcTimeoutPool.destroy(timeout);
             }
             Perf::counters.poll_active_cycles.add(activityTimer.split());
         }
@@ -325,19 +320,18 @@ SocketImpl::checkTaskTimeouts()
 
     SpinLock::Lock lock_socket(mutex);
     while (!taskTimeouts.empty()) {
-        Timeout<ServerTaskImpl*>* timeout = taskTimeouts.front();
+        Timeout<ServerTaskHandle*>* timeout = taskTimeouts.front();
         if (!timeout->hasElapsed(now)) {
             break;
         } else {
-            ServerTaskImpl* task = timeout->object;
-            if (task->handleTimeout()) {
+            ServerTaskHandle* handle = timeout->object;
+            if (handle->task.handleTimeout()) {
                 // Timeout handled and reset
                 taskTimeouts.setTimeout(timeout);
             } else {
                 taskTimeouts.cancelTimeout(timeout);
-                tasks.erase(task->getRequestId());
-                taskTimeoutPool.destroy(timeout);
-                delete task;
+                tasks.erase(handle->task.getRequestId());
+                taskPool.destroy(handle);
             }
             Perf::counters.poll_active_cycles.add(activityTimer.split());
         }

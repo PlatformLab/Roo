@@ -28,14 +28,12 @@
 
 #include "ObjectPool.h"
 #include "Proto.h"
+#include "RooPCImpl.h"
+#include "ServerTaskImpl.h"
 #include "SpinLock.h"
 #include "Timeout.h"
 
 namespace Roo {
-
-// Forward declaration
-class RooPCImpl;
-class ServerTaskImpl;
 
 /**
  * Implementation of Roo::Socket.
@@ -59,6 +57,48 @@ class SocketImpl : public Socket {
     Homa::Transport* const transport;
 
   private:
+    /**
+     * Collection of all socket state for a single RooPC.
+     */
+    struct RpcHandle {
+        /// Constructor
+        template <typename... Args>
+        RpcHandle(Args&&... args)
+            : rpc(static_cast<Args&&>(args)...)
+            , timeout(this)
+        {}
+
+        /// Destructor
+        ~RpcHandle() = default;
+
+        /// RooPC object
+        RooPCImpl rpc;
+
+        /// Timeout entry associated with this RooPC
+        Timeout<RpcHandle*> timeout;
+    };
+
+    /**
+     * Collection of all socket state for a single ServerTask.
+     */
+    struct ServerTaskHandle {
+        /// Constructor
+        template <typename... Args>
+        ServerTaskHandle(Args&&... args)
+            : task(static_cast<Args&&>(args)...)
+            , timeout(this)
+        {}
+
+        /// Destructor
+        ~ServerTaskHandle() = default;
+
+        /// ServerTask object
+        ServerTaskImpl task;
+
+        /// Timeout entry associated with this ServerTask
+        Timeout<ServerTaskHandle*> timeout;
+    };
+
     void processIncomingMessages();
     void checkDetachedTasks();
     void checkClientTimeouts();
@@ -72,22 +112,30 @@ class SocketImpl : public Socket {
     /// Used to generate socket unique identifiers.
     std::atomic<uint64_t> nextSequenceNumber;
 
-    // Monitor style mutex.
+    /// Monitor style mutex.
     SpinLock mutex;
 
+    /// RooPC allocator
+    ObjectPool<RpcHandle> rpcPool;
+
+    /// ServerTask allocator
+    ObjectPool<ServerTaskHandle> taskPool;
+
     /// Tracks the set of RooPC objects that were initiated by this socket.
-    std::unordered_map<Proto::RooId, RooPCImpl*, Proto::RooId::Hasher> rpcs;
-
-    /// RooPC ids in increasing timeout order.
-    TimeoutManager<Proto::RooId> rpcTimeouts;
-
-    /// Allocator for timeouts used in taskTimeouts.
-    ObjectPool<Timeout<Proto::RooId>> rpcTimeoutPool;
+    std::unordered_map<Proto::RooId, RpcHandle*, Proto::RooId::Hasher> rpcs;
 
     /// Tracks the set of live ServerTask objects managed by this socket.
-    std::unordered_map<Proto::RequestId, ServerTaskImpl*,
+    std::unordered_map<Proto::RequestId, ServerTaskHandle*,
                        Proto::RequestId::Hasher>
         tasks;
+
+    /// RooPC ids in increasing timeout order.
+    TimeoutManager<RpcHandle*> rpcTimeouts;
+
+    /// ServerTask objects have completed transmission and are waiting to be
+    /// garbage collected after a timeout. ServerTask objects are held in
+    /// timeout order.
+    TimeoutManager<ServerTaskHandle*> taskTimeouts;
 
     /// Collection of ServerTask objects (incoming requests) that haven't been
     /// requested by the application.
@@ -96,14 +144,6 @@ class SocketImpl : public Socket {
     /// ServerTask objects that have been processed by the application and
     /// remanded to the care of the Socket to complete transmission.
     std::deque<ServerTaskImpl*> detachedTasks;
-
-    /// ServerTask objects have completed transmission and are waiting to be
-    /// garbage collected after a timeout. ServerTask objects are held in
-    /// timeout order.
-    TimeoutManager<ServerTaskImpl*> taskTimeouts;
-
-    /// Allocator for timeouts used in taskTimeouts.
-    ObjectPool<Timeout<ServerTaskImpl*>> taskTimeoutPool;
 };
 
 }  // namespace Roo
