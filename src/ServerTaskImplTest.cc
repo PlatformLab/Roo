@@ -29,6 +29,7 @@ using ::testing::An;
 using ::testing::ByMove;
 using ::testing::Eq;
 using ::testing::InSequence;
+using ::testing::NiceMock;
 using ::testing::Return;
 using ::testing::TypedEq;
 
@@ -55,7 +56,6 @@ class ServerTaskImplTest : public ::testing::Test {
     ~ServerTaskImplTest()
     {
         if (handle != nullptr) {
-            EXPECT_CALL(inMessage, release());
             socket->taskPool.destroy(handle);
         }
         delete socket;
@@ -67,11 +67,11 @@ class ServerTaskImplTest : public ::testing::Test {
         EXPECT_CALL(driver,
                     getAddress(An<const Homa::Driver::WireFormatAddress*>()))
             .WillOnce(Return(replyAddress));
-        EXPECT_CALL(inMessage, strip(An<size_t>()));
+        EXPECT_CALL(mockRequest, strip(An<size_t>()));
         Proto::RequestHeader header;
         header.rooId = Proto::RooId(1, 1);
         header.requestId = Proto::RequestId{{{2, 2}, 3}, 0};
-        Homa::unique_ptr<Homa::InMessage> request(&inMessage);
+        Homa::unique_ptr<Homa::InMessage> request(&mockRequest);
         handle = socket->taskPool.construct(socket, Proto::TaskId(42, 1),
                                             &header, std::move(request));
         task = &handle->task;
@@ -79,6 +79,7 @@ class ServerTaskImplTest : public ::testing::Test {
 
     Mock::Homa::MockTransport transport;
     Mock::Homa::MockDriver driver;
+    NiceMock<Mock::Homa::MockInMessage> mockRequest;
     Mock::Homa::MockInMessage inMessage;
     Mock::Homa::MockOutMessage outMessage;
     Homa::Driver::Address replyAddress;
@@ -122,7 +123,7 @@ TEST_F(ServerTaskImplTest, constructor)
 TEST_F(ServerTaskImplTest, getRequest)
 {
     initDefaultTask();
-    EXPECT_EQ(&inMessage, task->getRequest());
+    EXPECT_EQ(&mockRequest, task->getRequest());
 }
 
 TEST_F(ServerTaskImplTest, reply)
@@ -298,6 +299,7 @@ TEST_F(ServerTaskImplTest, destroy_noMessages)
                 send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
                                           Homa::OutMessage::NO_KEEP_ALIVE)));
     EXPECT_CALL(outMessage, release());
+    EXPECT_CALL(mockRequest, release());
 
     task->destroy();
 
@@ -324,6 +326,7 @@ TEST_F(ServerTaskImplTest, destroy_request_single)
                 send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
     EXPECT_CALL(outMessage, release());
+    EXPECT_CALL(mockRequest, release());
 
     task->destroy();
 
@@ -353,6 +356,7 @@ TEST_F(ServerTaskImplTest, destroy_response_single)
                 send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
                                           Homa::OutMessage::NO_KEEP_ALIVE)));
     EXPECT_CALL(outMessage, release());
+    EXPECT_CALL(mockRequest, release());
 
     task->destroy();
 
@@ -389,6 +393,7 @@ TEST_F(ServerTaskImplTest, destroy_request_multiple)
                 send(Eq(0xFEED), Eq(Homa::OutMessage::NO_RETRY |
                                     Homa::OutMessage::NO_KEEP_ALIVE)));
     EXPECT_CALL(outMessage, release());
+    EXPECT_CALL(mockRequest, release());
 
     task->destroy();
 
@@ -428,6 +433,7 @@ TEST_F(ServerTaskImplTest, destroy_response_multiple)
                 send(Eq(replyAddress), Eq(Homa::OutMessage::NO_RETRY |
                                           Homa::OutMessage::NO_KEEP_ALIVE)));
     EXPECT_CALL(outMessage, release());
+    EXPECT_CALL(mockRequest, release());
 
     task->destroy();
 

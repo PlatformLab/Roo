@@ -275,6 +275,9 @@ ServerTaskImpl::destroy()
         sendBufferedMessage();
     }
 
+    // Request mesage no longer needed.
+    request.reset();
+
     // Don't delete the ServerTask yet; mark it as detached so that the Socket
     // will know when it asks this ServerTask to handle the task timeout.
     detached.store(true);

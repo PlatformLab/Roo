@@ -80,7 +80,7 @@ class ServerTaskImpl : public ServerTask {
 
     /// Message containing a task request; may come directly from the RooPC
     /// client, or from another server that has delegated a request to us.
-    Homa::unique_ptr<Homa::InMessage> const request;
+    Homa::unique_ptr<Homa::InMessage> request;
 
     /// Address of the client that sent the original request; the reply should
     /// be sent back to this address.
